@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "codex-organic-chem": {
+      "command": "uv",
+      "args": ["run", "codex-chem-mcp"]
+    }
+  }
+}
+

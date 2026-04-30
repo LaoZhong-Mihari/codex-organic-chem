@@ -1,0 +1,21 @@
+{
+  "name": "codex-chem-ketcher-integration",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite --host 127.0.0.1",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.1.1",
+    "vite": "^7.2.4",
+    "typescript": "^5.9.3",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "ketcher-react": "^3.12.0",
+    "ketcher-standalone": "^3.12.0"
+  },
+  "devDependencies": {}
+}

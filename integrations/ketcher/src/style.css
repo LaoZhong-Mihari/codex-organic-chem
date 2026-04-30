@@ -1,0 +1,48 @@
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-rows: 44px 1fr;
+  height: 100%;
+}
+
+.toolbar {
+  align-items: center;
+  border-bottom: 1px solid #d6d6d6;
+  display: flex;
+  gap: 8px;
+  padding: 6px 10px;
+}
+
+.toolbar button {
+  background: #fff;
+  border: 1px solid #b8b8b8;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+  padding: 5px 10px;
+}
+
+.toolbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.toolbar span {
+  color: #333;
+  font-size: 13px;
+  margin-left: 8px;
+}
+
+.editor-frame {
+  min-height: 0;
+}
