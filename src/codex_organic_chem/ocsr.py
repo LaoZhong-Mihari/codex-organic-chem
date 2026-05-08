@@ -34,9 +34,12 @@ def _run_custom_adapter(env_name: str, image_path: Path) -> tuple[list[str], lis
     command = os.environ.get(env_name)
     if not command:
         return [], [f"{env_name} is not set."]
-    rendered = command.format(input=str(image_path))
+    input_path = str(image_path)
+    quoted_input = shlex.quote(input_path)
+    rendered = command.format(input=quoted_input, input_raw=input_path, input_quoted=quoted_input)
+    timeout_s = int(os.environ.get("CODEX_CHEM_OCR_TIMEOUT_S", "300"))
     try:
-        code, stdout, stderr = run_command(shlex.split(rendered), timeout_s=120)
+        code, stdout, stderr = run_command(shlex.split(rendered), timeout_s=timeout_s)
     except Exception as exc:
         return [], [f"{env_name} adapter failed: {exc}"]
     warnings = []

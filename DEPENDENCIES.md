@@ -78,6 +78,21 @@ macOS helper:
 scripts/install_external_tools_macos.sh
 ```
 
+MolScribe can be wired to the bundled adapter without adding heavy ML packages
+to the main RDKit environment:
+
+```bash
+uv venv --python 3.10 ~/.local/share/codex-organic-chem/molscribe-venv
+uv pip install --python ~/.local/share/codex-organic-chem/molscribe-venv/bin/python MolScribe huggingface_hub
+uv pip install --python ~/.local/share/codex-organic-chem/molscribe-venv/bin/python 'numpy<2' --reinstall
+export CODEX_CHEM_MOLSCRIBE_CMD="$HOME/.local/share/codex-organic-chem/molscribe-venv/bin/python scripts/molscribe_adapter.py --input {input}"
+```
+
+The adapter downloads the upstream MolScribe checkpoint on first use unless
+`CODEX_CHEM_MOLSCRIBE_CHECKPOINT` points to a local `.pth` checkpoint. Keep
+molecule crops tight: full PDF pages that include text, arrows, conditions, and
+check boxes are not reliable OCSR inputs.
+
 ## Optional editor and figure tools
 
 These tools are used for human review and polishing of publication-oriented
@@ -105,6 +120,7 @@ export CODEX_CHEM_CREST_PATH=/path/to/crest
 export CODEX_CHEM_OSRA_PATH=/path/to/osra
 export CODEX_CHEM_MOLSCRIBE_CMD='your-molscribe-command --input {input}'
 export CODEX_CHEM_RXNSCRIBE_CMD='your-rxnscribe-command --input {input}'
+export CODEX_CHEM_OCR_TIMEOUT_S=300
 export CODEX_CHEM_CHEMDRAW_APP="/Applications/ChemDraw.app"
 export CODEX_CHEM_CHEMDOODLE_APP="/Applications/ChemDoodle.app"
 export CODEX_CHEM_CHEMDOODLE_WEB_DIR="/path/to/ChemDoodleWeb"

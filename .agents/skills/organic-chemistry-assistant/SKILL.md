@@ -21,6 +21,8 @@ codex-chem doctor
 
 1. Convert visual chemistry into machine-readable structure first.
    - Use `chem_parse_image(path, kind)` for screenshots, scans, schemes, or hand drawings.
+   - For textbook scans/PDFs, crop each molecule tightly before OCSR; full pages with labels, arrows, reagents, and check boxes are not reliable image inputs.
+   - When MolScribe emits textbook abbreviations such as Me/Et/Ph, OMe/OEt, NO2, CO2Et, t-Bu, OMs/OTs, or NHTs/NTs, use the local adapter expansion and then compare the RDKit redraw with the original crop. Treat mesylate/tosylate/protecting-group expansions as candidates that still need visual confirmation.
    - Immediately render the candidate with `chem_input_review`; stop until the user confirms the rendered molecule/reaction or provides corrected SMILES/Molfile/Rxnfile.
 2. Normalize every molecule before reasoning.
    - Use `chem_normalize_structure(smiles=...)` or Molfile input.

@@ -257,6 +257,7 @@ scripts/install_external_tools_macos.sh
 - For `xtb`/`crest`, the software prefers `CODEX_CHEM_*_PATH`, then the local conda-forge tool env, then PATH. This avoids broken Homebrew builds when the fallback exists.
 - OSRA: optional OCSR fallback. macOS has no stable Homebrew formula in this setup; use Docker/source OSRA and set `CODEX_CHEM_OSRA_PATH` if needed.
 - MolScribe/RxnScribe: optional modern image OCR adapters. Install them in separate ML environments and set `CODEX_CHEM_MOLSCRIBE_CMD` / `CODEX_CHEM_RXNSCRIBE_CMD`.
+- `scripts/molscribe_adapter.py` is a ready-to-use MolScribe command adapter for cropped molecule images. It prints JSON/SMILES for `codex-chem parse-image`, expands common textbook labels such as Me/OMe/NO2/CO2Et/t-Bu/Ph/OMs/OTs/NHTs, preserves MolScribe chiral atom tags when possible, and downloads the upstream checkpoint on first use when `CODEX_CHEM_MOLSCRIBE_CHECKPOINT` is not set.
 - Publication mechanism polish: ChemDraw, ChemDoodle, or ChemAxon Marvin are the
   chemically aware editors to learn from; Inkscape (`brew install --cask
   inkscape`) or Illustrator can polish the exported SVG but do not validate
