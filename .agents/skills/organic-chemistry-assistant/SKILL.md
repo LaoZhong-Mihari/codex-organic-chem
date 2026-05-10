@@ -1,6 +1,6 @@
 ---
 name: organic-chemistry-assistant
-description: Use this skill when Codex needs to understand, validate, draw, compute, or explain organic molecules, reaction schemes, retrosynthesis hints, or reaction mechanisms using the local codex-organic-chem CLI/MCP toolchain. Trigger for molecule images, SMILES/Molfile cleanup, reaction plausibility checks, lightweight RDKit/xTB calculations, and mechanism drafts.
+description: Use this skill when Codex needs to understand, validate, draw, compute, or explain organic molecules, reaction schemes, retrosynthesis hints, or reaction mechanisms using the local codex-organic-chem CLI/MCP toolchain. Trigger for molecule images, direct structure-rendered chemistry figures, SMILES/Molfile cleanup, reaction plausibility checks, lightweight RDKit/xTB calculations, and mechanism drafts.
 metadata:
   short-description: Local organic chemistry reasoning tools for Codex
 ---
@@ -21,8 +21,6 @@ codex-chem doctor
 
 1. Convert visual chemistry into machine-readable structure first.
    - Use `chem_parse_image(path, kind)` for screenshots, scans, schemes, or hand drawings.
-   - For textbook scans/PDFs, crop each molecule tightly before OCSR; full pages with labels, arrows, reagents, and check boxes are not reliable image inputs.
-   - When MolScribe emits textbook abbreviations such as Me/Et/Ph, OMe/OEt, NO2, CO2Et, t-Bu, OMs/OTs, or NHTs/NTs, use the local adapter expansion and then compare the RDKit redraw with the original crop. Treat mesylate/tosylate/protecting-group expansions as candidates that still need visual confirmation.
    - Immediately render the candidate with `chem_input_review`; stop until the user confirms the rendered molecule/reaction or provides corrected SMILES/Molfile/Rxnfile.
 2. Normalize every molecule before reasoning.
    - Use `chem_normalize_structure(smiles=...)` or Molfile input.
@@ -49,6 +47,41 @@ codex-chem doctor
    - Literature facts: DOI/title/journal/year/search query from available literature search tools.
    - Rule inferences: functional-group, reaction-class, and disconnection heuristics.
    - LLM assumptions: any explanation not directly produced by a tool.
+
+## Default drawing workflow
+
+For user-facing molecule answer sheets, synthesis routes, and intermediate
+schemes, default to direct structure rendering:
+
+- Treat prompt images as references for connectivity only. Do not crop, paste, or
+  reuse molecule pictures from the prompt as the final answer.
+- Do not hand-draw molecules bond-by-bond with arbitrary SVG/PIL line commands.
+  Encode each structure as SMILES, SMARTS, Molfile, Rxnfile, CDXML, or another
+  chemical structure format, then render it with RDKit/Open Babel/`chem_draw` or
+  another chemistry-aware renderer.
+- It is fine to use SVG/PIL/canvas for layout only: page size, whitespace,
+  arrows, reaction-condition text, panel labels, and embedding rendered molecule
+  SVGs/PNGs. The molecular bonds and atom labels must come from the chemistry
+  renderer.
+- For multi-molecule homework figures, create or update a reproducible script
+  with a structure table (`label`, `title`, `smiles`) and produce both a vector
+  master (`.svg`) and a raster preview (`.png`). Also write an audit file such as
+  `.smi`/`.mol` containing the exact structure inputs.
+- Preserve consistent regio-connectivity and visual orientation across a route:
+  reuse a shared structure core/atom order where possible, compare consecutive
+  rendered intermediates, and regenerate if substituents appear to jump sides.
+  If the source image is ambiguous, render a small preview and ask for
+  confirmation before finalizing.
+- For labels, follow the user's requested convention exactly. If they ask for
+  A-I only, do not add source compound numbers in the figure.
+
+Validation before delivery:
+
+- Parse and normalize every structure; fix or report any sanitization warning.
+- Visually inspect the final PNG/SVG for misplaced substituents, changed ring
+  size, overlapping text, clipped atoms, and unreadable labels.
+- Keep generated individual molecule files when useful, but remove stale outputs
+  from previous attempts so the folder does not contain wrong old structures.
 
 ## ACS manuscript figure standard
 
