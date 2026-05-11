@@ -15,11 +15,14 @@ from .service import (
     chem_mechanism_render,
     chem_mechanism_spec_example,
     chem_normalize_structure,
+    chem_ocsr_benchmark,
     chem_parse_image,
+    chem_parse_scheme,
     chem_reaction_analyze,
     chem_synthesis_suggest,
     chem_tool_doctor,
 )
+from .scheme_ocsr import benchmark_to_tsv
 from .utils import json_dumps
 
 
@@ -34,6 +37,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("parse-image", help="Parse molecule or reaction image into machine-readable candidates")
     p.add_argument("path")
     p.add_argument("--kind", choices=["auto", "molecule", "reaction"], default="auto")
+
+    p = sub.add_parser("ocsr-benchmark", help="Benchmark OCSR adapters against golden crop SMILES")
+    p.add_argument("--gold-smiles", required=True, help="Python/TSV/CSV file containing gold SMILES")
+    p.add_argument("--image-dir", required=True, help="Directory containing crop images")
+    p.add_argument("--out", choices=["json", "tsv"], default="json", help="Output format")
+
+    p = sub.add_parser("parse-scheme", help="Parse a reaction scheme image and molecule crops with context resolution")
+    p.add_argument("--image", required=True, help="Original full scheme image")
+    p.add_argument("--crops", required=True, help="Directory containing molecule crop images")
+    p.add_argument("--gold-map", help="Optional JSON/TSV compound-to-placeholder definitions")
+    p.add_argument("--out", choices=["json"], default="json", help="Output format")
 
     p = sub.add_parser("input-review", help="Render recognized input and block downstream work until user confirmation")
     group = p.add_mutually_exclusive_group(required=True)
@@ -102,6 +116,13 @@ def main(argv: list[str] | None = None) -> None:
         payload = chem_figure_tool_status()
     elif args.command == "parse-image":
         payload = chem_parse_image(args.path, kind=args.kind)
+    elif args.command == "ocsr-benchmark":
+        payload = chem_ocsr_benchmark(args.gold_smiles, args.image_dir)
+        if args.out == "tsv":
+            sys.stdout.write(benchmark_to_tsv(payload))
+            return
+    elif args.command == "parse-scheme":
+        payload = chem_parse_scheme(args.image, args.crops, gold_map=args.gold_map)
     elif args.command == "input-review":
         payload = chem_input_review(
             smiles=args.smiles,

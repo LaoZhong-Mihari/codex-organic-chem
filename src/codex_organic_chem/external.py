@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .figure_tools import ACS_PUBLICATION_STANDARD, FIGURE_TOOL_GUIDE, figure_tool_statuses
 from .models import CalculationRecord
+from .ocsr_adapters import OCSR_ADAPTERS, default_adapter_command
 from .rdkit_tools import RDKIT_AVAILABLE, parse_molecule, rdkit_version
 from .utils import bundled_tool_prefix, executable_status, run_command
 
@@ -57,10 +58,11 @@ INSTALL_GUIDE = {
         "required_for": ["chem_parse_image fallback when MolScribe/RxnScribe adapters are absent"],
         "binary": "osra",
         "macos": [
-            "Install Docker Desktop, then use an OSRA Docker image/wrapper, or build OSRA from source.",
+            "micromamba create -y -p ~/.local/share/codex-organic-chem/ocsr-tools/osra-osx64 -c edbeard -c mcs07 -c conda-forge --platform osx-64 osra=2.1.0",
+            "micromamba install -y -p ~/.local/share/codex-organic-chem/ocsr-tools/osra-osx64 -c edbeard -c mcs07 -c conda-forge --platform osx-64 openbabel=2.4.1",
             "Set CODEX_CHEM_OSRA_PATH=/path/to/osra if installed outside PATH.",
         ],
-        "notes": "No stable Homebrew formula was available during setup on this machine.",
+        "notes": "On Apple Silicon macOS this uses the osx-64 conda package through Rosetta; the bundled path is auto-detected.",
     },
     "molscribe": {
         "purpose": "Modern molecule image-to-structure recognition.",
@@ -70,6 +72,42 @@ INSTALL_GUIDE = {
             "Set CODEX_CHEM_MOLSCRIBE_CMD='your-command --input {input}'",
         ],
         "notes": "Kept as an adapter command because model weights and PyTorch versions vary by machine.",
+    },
+    "decimer": {
+        "purpose": "DECIMER Image Transformer SMILES recognition for chemical depictions.",
+        "required_for": ["optional multi-tool OCSR ensemble"],
+        "macos": [
+            "Install DECIMER in a separate ML environment following upstream instructions.",
+            "Set CODEX_CHEM_DECIMER_CMD='your-command --input {input}'",
+        ],
+        "notes": "Kept as an adapter command because TensorFlow/PyTorch stacks vary by machine.",
+    },
+    "molgrapher": {
+        "purpose": "Graph-based molecular recognition with abbreviation/OCR metadata.",
+        "required_for": ["optional multi-tool OCSR ensemble"],
+        "macos": [
+            "Install MolGrapher in a separate ML environment following upstream instructions.",
+            "Set CODEX_CHEM_MOLGRAPHER_CMD='your-command --input {input}'",
+        ],
+        "notes": "Useful when atom/bond/bbox metadata is needed for scheme-level resolution.",
+    },
+    "openchemie": {
+        "purpose": "Chemistry literature figure extraction and reaction diagram parsing.",
+        "required_for": ["optional full-scheme and reaction OCSR"],
+        "macos": [
+            "Install OpenChemIE in a separate ML environment following upstream instructions.",
+            "Set CODEX_CHEM_OPENCHEMIE_CMD='your-command --input {input}'",
+        ],
+        "notes": "Use as a configured adapter; unavailable status should not block other tools.",
+    },
+    "chemschematicresolver": {
+        "purpose": "Chemical schematic diagram and label resolution.",
+        "required_for": ["optional schematic label/structure resolution"],
+        "macos": [
+            "Install the bundled csr-osx64 environment and pyosra/osra_rgroup extension under ~/.local/share/codex-organic-chem/ocsr-tools.",
+            "Set CODEX_CHEM_CSR_CMD='scripts/csr_adapter.py --input {input}' or CODEX_CHEM_ENABLE_CSR_DEFAULT=1 when you explicitly want CSR in the adapter pass.",
+        ],
+        "notes": "The official conda package is linux-64 only; this macOS setup uses an x86_64 Python 3.6 environment through Rosetta. Q8 crops produced no CSR candidates, so CSR is installed but off by default.",
     },
     "rxnscribe": {
         "purpose": "Modern reaction scheme image recognition.",
@@ -106,8 +144,25 @@ def tool_statuses() -> dict[str, dict]:
             "message": "Set CODEX_CHEM_RXNSCRIBE_CMD to enable a custom RxnScribe adapter.",
         },
     }
+    for spec in OCSR_ADAPTERS:
+        key = f"{spec.name}_command"
+        command = os.environ.get(spec.env_var) or default_adapter_command(spec)
+        statuses[key] = {
+            "name": key,
+            "status": "available" if command else "unavailable",
+            "env_var": spec.env_var,
+            "command": command,
+            "message": (
+                f"Using configured/default {spec.name} adapter."
+                if command
+                else f"Set {spec.env_var} to enable a custom {spec.name} adapter."
+            ),
+            "purpose": spec.purpose,
+        }
     for key, guide in INSTALL_GUIDE.items():
         status_key = "obabel" if key == "open-babel" else key
+        if key in {"molscribe", "decimer", "molgrapher", "openchemie", "chemschematicresolver", "rxnscribe"}:
+            status_key = f"{key}_command"
         if status_key in statuses:
             statuses[status_key]["purpose"] = guide["purpose"]
             statuses[status_key]["install"] = {
@@ -126,14 +181,15 @@ def tool_statuses() -> dict[str, dict]:
 
 def doctor_report() -> dict:
     statuses = tool_statuses()
+    ocsr_keys = [f"{spec.name}_command" for spec in OCSR_ADAPTERS]
     missing = [
         key
-        for key in ["obabel", "xtb", "crest", "osra", "molscribe_command", "rxnscribe_command"]
+        for key in ["obabel", "xtb", "crest", "osra", *ocsr_keys]
         if statuses.get(key, {}).get("status") != "available"
     ]
     ready = [
         key
-        for key in ["rdkit", "obabel", "xtb", "crest", "osra", "molscribe_command", "rxnscribe_command"]
+        for key in ["rdkit", "obabel", "xtb", "crest", "osra", *ocsr_keys]
         if statuses.get(key, {}).get("status") == "available"
     ]
     return {
@@ -144,8 +200,7 @@ def doctor_report() -> dict:
             "calculation_stack_ready": statuses["xtb"]["status"] == "available"
             and statuses["crest"]["status"] == "available",
             "image_ocr_stack_ready": statuses["osra"]["status"] == "available"
-            or statuses["molscribe_command"]["status"] == "available"
-            or statuses["rxnscribe_command"]["status"] == "available",
+            or any(statuses[key]["status"] == "available" for key in ocsr_keys),
         },
         "statuses": statuses,
         "install_guide": INSTALL_GUIDE,
@@ -156,7 +211,7 @@ def doctor_report() -> dict:
         "notes": [
             "RDKit is required for the core assistant and is installed with uv.",
             "Open Babel, xTB, and CREST add conversion and computation capability.",
-            "OSRA/MolScribe/RxnScribe are optional OCSR adapters for molecule/reaction images.",
+            "OSRA and the configured MolScribe/DECIMER/MolGrapher/OpenChemIE/ChemSchematicResolver/RxnScribe commands are optional OCSR adapters.",
             "Publication mechanism figures require explicit intermediates, atom-map anchored arrows, mechanism-relevant lone pairs, charges, and partial charges; use codex-chem mechanism-render before final ChemDraw/Illustrator/Inkscape polish.",
             "Unavailable tools are reported explicitly; the assistant should not invent results.",
         ],

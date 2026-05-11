@@ -19,11 +19,20 @@ from .rdkit_tools import (
     reaction_to_svg,
 )
 from .reaction import analyze_reaction
+from .scheme_ocsr import benchmark_ocsr, parse_scheme
 from .synthesis import suggest_synthesis_path
 
 
 def chem_parse_image(path: str, kind: str = "auto") -> dict[str, Any]:
     return parse_image(path=path, kind=kind)
+
+
+def chem_ocsr_benchmark(gold_smiles: str, image_dir: str) -> dict[str, Any]:
+    return benchmark_ocsr(gold_smiles=gold_smiles, image_dir=image_dir)
+
+
+def chem_parse_scheme(image: str, crops: str, gold_map: str | None = None) -> dict[str, Any]:
+    return parse_scheme(image=image, crops=crops, gold_map=gold_map)
 
 
 def chem_input_review(

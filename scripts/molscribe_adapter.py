@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,14 @@ def _add_atom(mol, symbol: str, *, charge: int = 0, aromatic: bool = False) -> i
     return mol.AddAtom(atom)
 
 
+def _add_dummy_atom(mol, label: str) -> int:
+    from rdkit import Chem
+
+    atom = Chem.Atom(0)
+    atom.SetProp("atomLabel", label)
+    return mol.AddAtom(atom)
+
+
 def _add_methanesulfonyl(mol, root_symbol: str) -> int:
     from rdkit import Chem
 
@@ -86,10 +95,70 @@ def _add_tosyl(mol, root_symbol: str) -> int:
     return root
 
 
+def _add_toluenesulfonyl(mol) -> int:
+    from rdkit import Chem
+
+    sulfur = _add_atom(mol, "S")
+    oxygen_a = _add_atom(mol, "O")
+    oxygen_b = _add_atom(mol, "O")
+    aryl = [_add_atom(mol, "C", aromatic=True) for _ in range(6)]
+    methyl = _add_atom(mol, "C")
+    mol.AddBond(sulfur, oxygen_a, Chem.BondType.DOUBLE)
+    mol.AddBond(sulfur, oxygen_b, Chem.BondType.DOUBLE)
+    mol.AddBond(sulfur, aryl[0], Chem.BondType.SINGLE)
+    for idx in range(6):
+        mol.AddBond(aryl[idx], aryl[(idx + 1) % 6], Chem.BondType.AROMATIC)
+    mol.AddBond(aryl[3], methyl, Chem.BondType.SINGLE)
+    return sulfur
+
+
+def _add_methoxyethoxymethoxy_oxy(mol) -> int:
+    from rdkit import Chem
+
+    oxygen_root = _add_atom(mol, "O")
+    methylene = _add_atom(mol, "C")
+    acetal_oxygen = _add_atom(mol, "O")
+    ethylene_a = _add_atom(mol, "C")
+    ethylene_b = _add_atom(mol, "C")
+    methoxy_oxygen = _add_atom(mol, "O")
+    methyl = _add_atom(mol, "C")
+    mol.AddBond(oxygen_root, methylene, Chem.BondType.SINGLE)
+    mol.AddBond(methylene, acetal_oxygen, Chem.BondType.SINGLE)
+    mol.AddBond(acetal_oxygen, ethylene_a, Chem.BondType.SINGLE)
+    mol.AddBond(ethylene_a, ethylene_b, Chem.BondType.SINGLE)
+    mol.AddBond(ethylene_b, methoxy_oxygen, Chem.BondType.SINGLE)
+    mol.AddBond(methoxy_oxygen, methyl, Chem.BondType.SINGLE)
+    return oxygen_root
+
+
+def _add_methoxymethoxy_oxy(mol) -> int:
+    from rdkit import Chem
+
+    oxygen_root = _add_atom(mol, "O")
+    methylene = _add_atom(mol, "C")
+    methoxy_oxygen = _add_atom(mol, "O")
+    methyl = _add_atom(mol, "C")
+    mol.AddBond(oxygen_root, methylene, Chem.BondType.SINGLE)
+    mol.AddBond(methylene, methoxy_oxygen, Chem.BondType.SINGLE)
+    mol.AddBond(methoxy_oxygen, methyl, Chem.BondType.SINGLE)
+    return oxygen_root
+
+
+def _add_ro_label(mol) -> int:
+    from rdkit import Chem
+
+    oxygen = _add_atom(mol, "O")
+    r_group = _add_dummy_atom(mol, "R")
+    mol.AddBond(oxygen, r_group, Chem.BondType.SINGLE)
+    return oxygen
+
+
 def _add_abbreviation(mol, label: str) -> int | None:
     from rdkit import Chem
 
     normalized = _normalized_label(label)
+    if normalized in {"R", "X"} or re.fullmatch(r"R[0-9]+", normalized):
+        return _add_dummy_atom(mol, normalized)
     if normalized in {"C@", "C@@", "CH@", "CH@@", "C@H", "C@@H"}:
         atom = Chem.Atom("C")
         atom.SetChiralTag(
@@ -114,6 +183,8 @@ def _add_abbreviation(mol, label: str) -> int | None:
         methyl = _add_atom(mol, "C")
         mol.AddBond(oxygen, methyl, Chem.BondType.SINGLE)
         return oxygen
+    if normalized in {"RO", "OR"}:
+        return _add_ro_label(mol)
     if normalized in {"OEt", "EtO"}:
         oxygen = _add_atom(mol, "O")
         carbon_a = _add_atom(mol, "C")
@@ -125,6 +196,12 @@ def _add_abbreviation(mol, label: str) -> int | None:
         return _add_methanesulfonyl(mol, "O")
     if normalized in {"OTs", "TsO", "OTos", "TosO"}:
         return _add_tosyl(mol, "O")
+    if normalized in {"SO2Tol", "SO2Toluyl", "SO2Tos", "Ts", "Tos"}:
+        return _add_toluenesulfonyl(mol)
+    if normalized in {"MEMO", "MEMOCH2"}:
+        return _add_methoxyethoxymethoxy_oxy(mol)
+    if normalized == "MOMO":
+        return _add_methoxymethoxy_oxy(mol)
     if normalized in {"NMs", "NHMs", "MsN", "MsNH"}:
         return _add_methanesulfonyl(mol, "N")
     if normalized in {"NTs", "NHTs", "TsN", "TsNH", "NTos", "NHTos", "TosN", "TosNH"}:
@@ -174,6 +251,39 @@ def _add_abbreviation(mol, label: str) -> int | None:
             mol.AddBond(atoms[idx], atoms[(idx + 1) % 6], Chem.BondType.AROMATIC)
         return atoms[0]
     return None
+
+
+def _smiles_score(smiles: str | None) -> float:
+    if not smiles or smiles == "<invalid>":
+        return -999.0
+    try:
+        from rdkit import Chem
+
+        mol = Chem.MolFromSmiles(smiles, sanitize=False)
+        if mol is None:
+            return -999.0
+        frags = Chem.GetMolFrags(mol, asMols=True, sanitizeFrags=False)
+        dummy_atoms = sum(1 for atom in mol.GetAtoms() if atom.GetAtomicNum() == 0)
+        artifact_singletons = 0
+        if len(frags) > 1:
+            for frag in frags:
+                if frag.GetNumAtoms() == 1 and frag.GetAtomWithIdx(0).GetAtomicNum() in {1, 9, 17, 35, 53}:
+                    artifact_singletons += 1
+        return mol.GetNumHeavyAtoms() - 8 * dummy_atoms - 4 * (len(frags) - 1) - 12 * artifact_singletons
+    except Exception:
+        return -999.0
+
+
+def _should_use_graph_fallback(
+    smiles: str | None, fallback_smiles: str | None, fallback_warnings: list[str] | None = None
+) -> bool:
+    if not fallback_smiles:
+        return False
+    if not smiles or smiles == "<invalid>":
+        return True
+    if any(warning.startswith("Skipping MolScribe bond") for warning in fallback_warnings or []):
+        return False
+    return _smiles_score(fallback_smiles) > _smiles_score(smiles) + 1
 
 
 def _molscribe_graph_to_smiles(output: dict[str, Any]) -> tuple[str | None, str | None, list[str]]:
@@ -258,11 +368,16 @@ def main(argv: list[str] | None = None) -> int:
     smiles = output.get("smiles")
     molfile = output.get("molfile")
     adapter_warnings: list[str] = []
-    if not smiles or smiles == "<invalid>":
-        fallback_smiles, fallback_molfile, adapter_warnings = _molscribe_graph_to_smiles(output)
-        if fallback_smiles:
-            smiles = fallback_smiles
-            molfile = fallback_molfile or molfile
+    fallback_smiles, fallback_molfile, fallback_warnings = _molscribe_graph_to_smiles(output)
+    if _should_use_graph_fallback(smiles, fallback_smiles, fallback_warnings):
+        smiles = fallback_smiles
+        molfile = fallback_molfile or molfile
+        adapter_warnings = [
+            "Used MolScribe atoms/bonds fallback because it produced a cleaner abbreviation-aware candidate.",
+            *fallback_warnings,
+        ]
+    elif not smiles or smiles == "<invalid>":
+        adapter_warnings = fallback_warnings
 
     payload = {
         "smiles": smiles,

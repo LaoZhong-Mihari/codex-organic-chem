@@ -3,7 +3,16 @@ import shlex
 import sys
 from pathlib import Path
 
-from codex_organic_chem.service import chem_draw, chem_input_review, chem_normalize_structure, chem_parse_image
+from codex_organic_chem.scheme_ocsr import resolve_placeholders, route_consistency_warnings
+from codex_organic_chem.ocsr import _parse_candidate_lines
+from codex_organic_chem.service import (
+    chem_draw,
+    chem_input_review,
+    chem_normalize_structure,
+    chem_ocsr_benchmark,
+    chem_parse_image,
+    chem_parse_scheme,
+)
 
 
 def test_normalize_aspirin():
@@ -43,7 +52,7 @@ def test_custom_ocsr_adapter_handles_image_paths_with_spaces(tmp_path, monkeypat
                 "parser.add_argument('--input', required=True)",
                 "args = parser.parse_args()",
                 "assert pathlib.Path(args.input).exists()",
-                "print(json.dumps({'smiles': 'CCO'}))",
+                "print(json.dumps({'smiles': 'CCO', 'adapter_warnings': ['adapter note']}))",
             ]
         ),
         encoding="utf-8",
@@ -55,6 +64,108 @@ def test_custom_ocsr_adapter_handles_image_paths_with_spaces(tmp_path, monkeypat
 
     assert result["status"] == "awaiting_user_confirmation"
     assert result["candidates"][0]["canonical_smiles"] == "CCO"
+    assert "adapter note" in result["warnings"]
+
+
+def test_json_adapter_warning_without_candidates_is_not_smiles():
+    candidates, warnings = _parse_candidate_lines(
+        '{"tool": "chemschematicresolver", "candidates": [], "adapter_warnings": ["no candidates"]}',
+        "chemschematicresolver",
+    )
+
+    assert candidates == []
+    assert warnings == ["no candidates"]
+
+
+def test_multi_adapter_ensemble_prefers_sanitized_low_dummy_candidate(tmp_path, monkeypatch):
+    image = tmp_path / "scheme crop.png"
+    image.write_bytes(b"adapter only checks path plumbing")
+    bad_adapter = tmp_path / "bad_adapter.py"
+    good_adapter = tmp_path / "good_adapter.py"
+    bad_adapter.write_text("print('*.*')\n", encoding="utf-8")
+    good_adapter.write_text("print('CCO')\n", encoding="utf-8")
+    monkeypatch.setenv("CODEX_CHEM_MOLSCRIBE_CMD", f"{shlex.quote(sys.executable)} {shlex.quote(str(bad_adapter))}")
+    monkeypatch.setenv("CODEX_CHEM_DECIMER_CMD", f"{shlex.quote(sys.executable)} {shlex.quote(str(good_adapter))}")
+
+    result = chem_parse_image(str(image), kind="molecule")
+
+    assert result["candidates"][0]["canonical_smiles"] == "CCO"
+    assert result["candidates"][0]["metadata"]["ocsr_tool"] == "decimer"
+    assert result["ranked_candidates"][0]["metadata"]["rank"] == 1
+
+
+def test_multi_adapter_ensemble_penalizes_collapsed_tiny_candidates(tmp_path, monkeypatch):
+    image = tmp_path / "scheme crop.png"
+    image.write_bytes(b"adapter only checks path plumbing")
+    collapsed_adapter = tmp_path / "collapsed_adapter.py"
+    larger_adapter = tmp_path / "larger_adapter.py"
+    collapsed_adapter.write_text("print('C')\n", encoding="utf-8")
+    larger_adapter.write_text("print('*OCCC1(C)CCC(C(C)C)C1=C.I')\n", encoding="utf-8")
+    monkeypatch.setenv("CODEX_CHEM_MOLGRAPHER_CMD", f"{shlex.quote(sys.executable)} {shlex.quote(str(collapsed_adapter))}")
+    monkeypatch.setenv("CODEX_CHEM_MOLSCRIBE_CMD", f"{shlex.quote(sys.executable)} {shlex.quote(str(larger_adapter))}")
+
+    result = chem_parse_image(str(image), kind="molecule")
+
+    assert result["candidates"][0]["canonical_smiles"] != "C"
+    assert result["candidates"][0]["metadata"]["ocsr_tool"] == "molscribe"
+
+
+def test_multi_adapter_ensemble_penalizes_low_confidence_label_artifacts(tmp_path, monkeypatch):
+    image = tmp_path / "scheme crop.png"
+    image.write_bytes(b"adapter only checks path plumbing")
+    artifact_adapter = tmp_path / "artifact_adapter.py"
+    placeholder_adapter = tmp_path / "placeholder_adapter.py"
+    artifact_adapter.write_text(
+        "import json\nprint(json.dumps({'tool': 'molgrapher', 'smiles': 'CC(F)=CB', 'confidence': 0.0}))\n",
+        encoding="utf-8",
+    )
+    placeholder_adapter.write_text(
+        "import json\nprint(json.dumps({'tool': 'molscribe', 'smiles': '*C=C*', 'confidence': 0.85}))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_CHEM_MOLGRAPHER_CMD", f"{shlex.quote(sys.executable)} {shlex.quote(str(artifact_adapter))}")
+    monkeypatch.setenv("CODEX_CHEM_MOLSCRIBE_CMD", f"{shlex.quote(sys.executable)} {shlex.quote(str(placeholder_adapter))}")
+
+    result = chem_parse_image(str(image), kind="molecule")
+
+    assert result["candidates"][0]["metadata"]["ocsr_tool"] == "molscribe"
+
+
+def test_ocsr_benchmark_reports_exact_match_with_fake_adapter(tmp_path, monkeypatch):
+    image_dir = tmp_path / "crops"
+    image_dir.mkdir()
+    (image_dir / "A_source_7.png").write_bytes(b"fake crop")
+    gold = tmp_path / "gold.tsv"
+    gold.write_text("label\tcompound\tsmiles\nA\t7\tCCO\n", encoding="utf-8")
+    adapter = tmp_path / "adapter.py"
+    adapter.write_text("print('CCO')\n", encoding="utf-8")
+    monkeypatch.setenv("CODEX_CHEM_DECIMER_CMD", f"{shlex.quote(sys.executable)} {shlex.quote(str(adapter))}")
+
+    result = chem_ocsr_benchmark(str(gold), str(image_dir))
+
+    assert result["summary"]["gold_count"] == 1
+    assert result["summary"]["exact_graph_matches"] == 1
+    assert result["rows"][0]["best"]["tool"] == "decimer"
+
+
+def test_parse_scheme_resolves_gold_map_placeholders(tmp_path, monkeypatch):
+    image = tmp_path / "scheme.png"
+    image.write_bytes(b"fake scheme")
+    crop_dir = tmp_path / "crops"
+    crop_dir.mkdir()
+    (crop_dir / "C_source_11.png").write_bytes(b"fake crop")
+    legend = tmp_path / "legend.json"
+    legend.write_text('{"11": {"1": "OTs"}}', encoding="utf-8")
+    adapter = tmp_path / "adapter.py"
+    adapter.write_text("print('[*:1]CCOCOCCOC')\n", encoding="utf-8")
+    monkeypatch.setenv("CODEX_CHEM_MOLSCRIBE_CMD", f"{shlex.quote(sys.executable)} {shlex.quote(str(adapter))}")
+
+    result = chem_parse_scheme(str(image), str(crop_dir), gold_map=str(legend))
+
+    resolved = result["compounds"][0]["resolved_candidates"][0]
+    assert resolved["status"] == "resolved"
+    assert "S(=O)(=O)" in resolved["smiles"]
+    assert "*" not in resolved["smiles"]
 
 
 def test_molscribe_adapter_expands_common_abbreviations_and_chirality():
@@ -111,6 +222,81 @@ def test_molscribe_adapter_expands_sulfonyl_leaving_groups_and_protecting_groups
     assert mesylate_smiles.startswith("CO")
     assert tosylhydrazide_warnings == []
     assert "Cc1ccc(S(=O)(=O)NN)" in tosylhydrazide_smiles
+
+
+def test_molscribe_adapter_expands_scheme_abbreviations_and_preserves_placeholders():
+    adapter_path = Path(__file__).resolve().parents[1] / "scripts" / "molscribe_adapter.py"
+    spec = importlib.util.spec_from_file_location("molscribe_adapter", adapter_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    memo_smiles, _, memo_warnings = module._molscribe_graph_to_smiles(
+        {
+            "atoms": [{"atom_symbol": "C"}, {"atom_symbol": "[MEMO]"}],
+            "bonds": [{"bond_type": "single", "endpoint_atoms": [0, 1]}],
+        }
+    )
+    sulfonyl_smiles, _, sulfonyl_warnings = module._molscribe_graph_to_smiles(
+        {
+            "atoms": [{"atom_symbol": "C"}, {"atom_symbol": "[SO2Tol]"}],
+            "bonds": [{"bond_type": "single", "endpoint_atoms": [0, 1]}],
+        }
+    )
+    placeholder_smiles, _, placeholder_warnings = module._molscribe_graph_to_smiles(
+        {
+            "atoms": [{"atom_symbol": "C"}, {"atom_symbol": "[RO]"}, {"atom_symbol": "[X]"}],
+            "bonds": [
+                {"bond_type": "single", "endpoint_atoms": [0, 1]},
+                {"bond_type": "single", "endpoint_atoms": [0, 2]},
+            ],
+        }
+    )
+
+    assert memo_warnings == []
+    assert "COCCOCOC" in memo_smiles
+    assert sulfonyl_warnings == []
+    assert "Cc1ccc(S(C)(=O)=O)" in sulfonyl_smiles
+    assert placeholder_warnings == []
+    assert placeholder_smiles.count("*") == 2
+
+
+def test_placeholder_resolver_expands_leaving_group_and_memo():
+    result = resolve_placeholders("CC([*:1])CCOCOCCOC", {"1": "OTs"})
+
+    assert result["status"] == "resolved"
+    assert "S(=O)(=O)" in result["smiles"]
+    assert "c1ccc(C)cc1" in result["smiles"]
+    assert result["unresolved_labels"] == []
+
+
+def test_placeholder_resolver_replaces_h_without_dummy():
+    result = resolve_placeholders("CC1([*:1])CCCCC1", {"1": "H"})
+
+    assert result["status"] == "resolved"
+    assert "*" not in result["smiles"]
+
+
+def test_placeholder_resolver_distinguishes_13_14_16_definitions():
+    tosyl = resolve_placeholders("CC([*:1])", {"1": "SO2Tol"})["smiles"]
+    carbonyl = resolve_placeholders("CC(=[*:1])", {"1": "O"})["smiles"]
+    aldehyde = resolve_placeholders("CC([*:1])", {"1": "CHO"})["smiles"]
+
+    assert tosyl != carbonyl != aldehyde
+    assert "S(=O)(=O)" in tosyl
+    assert carbonyl == "CC=O"
+    assert "C=O" in aldehyde or "CC(C)=O" in aldehyde
+
+
+def test_route_consistency_flags_aromatic_relation_jump():
+    warnings = route_consistency_warnings(
+        [
+            {"label": "A", "smiles": "CCc1ccc(CCC)cc1"},
+            {"label": "B", "smiles": "CCc1cccc(CCC)c1"},
+        ]
+    )
+
+    assert any("aromatic substitution relation changed" in warning for warning in warnings)
 
 
 def test_input_review_blocks_until_confirmation():

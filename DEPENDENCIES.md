@@ -54,8 +54,8 @@ directory and make sure `codex-chem` / `codex-chem-mcp` run from this project.
 
 ## Optional external chemistry tools
 
-The CLI works without these tools, but `codex-chem doctor` will report richer
-capability when they are installed.
+The CLI works without these tools. Keep them out of the core environment unless
+the task needs them; `codex-chem doctor` reports what is configured locally.
 
 - Open Babel: executable `obabel`; used for structure conversion and CDXML/SDF
   workflows. macOS: `brew install open-babel`.
@@ -65,12 +65,19 @@ capability when they are installed.
   `brew tap grimme-lab/qc && brew install crest`. The bundled installer falls
   back to a micromamba conda-forge environment at
   `~/.local/share/codex-organic-chem/conda-tools`.
-- OSRA: optional OCSR fallback for molecule images. Install from Docker/source
-  where needed and set `CODEX_CHEM_OSRA_PATH` if it is outside `PATH`.
-- MolScribe: optional modern molecule-image OCR adapter. Install in a separate
-  ML environment and set `CODEX_CHEM_MOLSCRIBE_CMD`.
-- RxnScribe/OpenChemIE: optional reaction-image OCR adapter. Install in a
-  separate ML environment and set `CODEX_CHEM_RXNSCRIBE_CMD`.
+- MolScribe: recommended molecule-crop OCSR adapter. Install in a separate ML
+  environment and set `CODEX_CHEM_MOLSCRIBE_CMD`.
+- OSRA: useful legacy fallback for molecule crops. On Apple Silicon macOS, the
+  tested local fallback is
+  `~/.local/share/codex-organic-chem/ocsr-tools/osra-osx64/bin/osra`; the code
+  auto-detects that path.
+- ChemSchematicResolver: installed/tested as a Rosetta x86_64 Python 3.6 helper
+  for schematic labels, but off by default because the Q8 crop benchmark
+  produced no structure candidates. Enable only with `CODEX_CHEM_CSR_CMD` or
+  `CODEX_CHEM_ENABLE_CSR_DEFAULT=1`.
+- DECIMER, MolGrapher, OpenChemIE, and RxnScribe: experimental/auxiliary OCSR
+  adapters. Keep them in separate environments and configure the matching
+  `CODEX_CHEM_*_CMD` only when a task benefits from them.
 
 macOS helper:
 
@@ -119,6 +126,11 @@ export CODEX_CHEM_XTB_PATH=/path/to/xtb
 export CODEX_CHEM_CREST_PATH=/path/to/crest
 export CODEX_CHEM_OSRA_PATH=/path/to/osra
 export CODEX_CHEM_MOLSCRIBE_CMD='your-molscribe-command --input {input}'
+export CODEX_CHEM_DECIMER_CMD='your-decimer-command --input {input}'
+export CODEX_CHEM_MOLGRAPHER_CMD='your-molgrapher-command --input {input}'
+export CODEX_CHEM_OPENCHEMIE_CMD='your-openchemie-command --input {input}'
+export CODEX_CHEM_CSR_CMD='your-chemschematicresolver-command --input {input}'
+export CODEX_CHEM_ENABLE_CSR_DEFAULT=1
 export CODEX_CHEM_RXNSCRIBE_CMD='your-rxnscribe-command --input {input}'
 export CODEX_CHEM_OCR_TIMEOUT_S=300
 export CODEX_CHEM_CHEMDRAW_APP="/Applications/ChemDraw.app"

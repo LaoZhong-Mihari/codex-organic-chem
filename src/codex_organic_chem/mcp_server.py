@@ -13,7 +13,9 @@ from .service import (
     chem_mechanism_render as _chem_mechanism_render,
     chem_mechanism_spec_example as _chem_mechanism_spec_example,
     chem_normalize_structure as _chem_normalize_structure,
+    chem_ocsr_benchmark as _chem_ocsr_benchmark,
     chem_parse_image as _chem_parse_image,
+    chem_parse_scheme as _chem_parse_scheme,
     chem_reaction_analyze as _chem_reaction_analyze,
     chem_synthesis_suggest as _chem_synthesis_suggest,
     chem_tool_doctor as _chem_tool_doctor,
@@ -35,6 +37,14 @@ def main() -> None:
     @mcp.tool()
     def chem_parse_image(path: str, kind: str = "auto") -> dict[str, Any]:
         return _chem_parse_image(path=path, kind=kind)
+
+    @mcp.tool()
+    def chem_ocsr_benchmark(gold_smiles: str, image_dir: str) -> dict[str, Any]:
+        return _chem_ocsr_benchmark(gold_smiles=gold_smiles, image_dir=image_dir)
+
+    @mcp.tool()
+    def chem_parse_scheme(image: str, crops: str, gold_map: str | None = None) -> dict[str, Any]:
+        return _chem_parse_scheme(image=image, crops=crops, gold_map=gold_map)
 
     @mcp.tool()
     def chem_input_review(

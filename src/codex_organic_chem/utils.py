@@ -29,6 +29,9 @@ def executable_path(name: str) -> str | None:
     if env_value and Path(env_value).expanduser().exists():
         return str(Path(env_value).expanduser())
     bundled = bundled_tool_prefix() / "bin" / name
+    bundled_ocsr = Path.home() / ".local" / "share" / "codex-organic-chem" / "ocsr-tools" / "osra-osx64" / "bin" / name
+    if name == "osra" and bundled_ocsr.exists():
+        return str(bundled_ocsr)
     if name in {"xtb", "crest"} and bundled.exists():
         return str(bundled)
     found = shutil.which(name)

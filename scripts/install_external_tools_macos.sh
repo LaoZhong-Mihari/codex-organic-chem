@@ -23,9 +23,11 @@ fi
 cat <<'EOF'
 
 Optional image OCR adapters still need separate setup:
-- OSRA: install Docker/source OSRA and set CODEX_CHEM_OSRA_PATH if it is outside PATH.
+- OSRA: on Apple Silicon macOS, the tested fallback is the osx-64 conda package at ~/.local/share/codex-organic-chem/ocsr-tools/osra-osx64; codex-chem auto-detects it.
 - MolScribe: install in a separate ML environment and set CODEX_CHEM_MOLSCRIBE_CMD='your-command {input}'.
-- RxnScribe/OpenChemIE: install in a separate ML environment and set CODEX_CHEM_RXNSCRIBE_CMD='your-command {input}'.
+- DECIMER/MolGrapher/OpenChemIE: install each in a separate ML environment and set the matching CODEX_CHEM_*_CMD variable.
+- ChemSchematicResolver: installed/tested as a Rosetta/x86_64 Python 3.6 env at ~/.local/share/codex-organic-chem/ocsr-tools/csr-osx64 plus scripts/csr_adapter.py, but off by default; enable with CODEX_CHEM_CSR_CMD or CODEX_CHEM_ENABLE_CSR_DEFAULT=1.
+- RxnScribe: install in a separate ML environment and set CODEX_CHEM_RXNSCRIBE_CMD='your-command {input}'.
 
 Run:
   codex-chem doctor
