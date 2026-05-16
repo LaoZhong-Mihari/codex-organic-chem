@@ -6,6 +6,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
+from .image_preprocessing import OcsrImageVariant, build_ocsr_image_variants
 from .ocsr_adapters import OcsrAdapterSpec, adapter_specs_for_kind, default_adapter_command
 from .rdkit_tools import normalize_structure, reaction_to_svg
 from .scheme_ocsr import rank_candidates
@@ -71,12 +72,15 @@ def _parse_candidate_lines(text: str, default_tool: str) -> tuple[list[dict[str,
     return candidates, warnings
 
 
-def _run_custom_adapter(spec: OcsrAdapterSpec, image_path: Path) -> tuple[list[dict[str, Any]], list[str]]:
+def _run_custom_adapter(
+    spec: OcsrAdapterSpec,
+    image_variant: OcsrImageVariant,
+) -> tuple[list[dict[str, Any]], list[str]]:
     env_command = os.environ.get(spec.env_var)
     command = env_command or default_adapter_command(spec)
     if not command:
         return [], []
-    input_path = str(image_path)
+    input_path = str(image_variant.path)
     quoted_input = shlex.quote(input_path)
     rendered = command.format(input=quoted_input, input_raw=input_path, input_quoted=quoted_input)
     timeout_s = int(os.environ.get("CODEX_CHEM_OCR_TIMEOUT_S", "300"))
@@ -91,15 +95,16 @@ def _run_custom_adapter(spec: OcsrAdapterSpec, image_path: Path) -> tuple[list[d
     warnings.extend(parse_warnings)
     for value in values:
         value["adapter_env"] = spec.env_var if env_command else f"default:{spec.name}"
+        value["image_variant"] = image_variant.name
     return values, warnings
 
 
-def _run_osra(image_path: Path) -> tuple[list[dict[str, Any]], list[str]]:
+def _run_osra(image_variant: OcsrImageVariant) -> tuple[list[dict[str, Any]], list[str]]:
     status = executable_status("osra", ("--version",))
     if status.status != "available":
         return [], ["OSRA is unavailable; install osra or configure an OCSR adapter command."]
     try:
-        code, stdout, stderr = run_command(["osra", "-f", "smi", str(image_path)], timeout_s=120)
+        code, stdout, stderr = run_command(["osra", "-f", "smi", str(image_variant.path)], timeout_s=120)
     except Exception as exc:
         return [], [f"OSRA execution failed: {exc}"]
     warnings = []
@@ -107,6 +112,8 @@ def _run_osra(image_path: Path) -> tuple[list[dict[str, Any]], list[str]]:
         warnings.append(f"OSRA exited with code {code}: {stderr.strip()}")
     values, parse_warnings = _parse_candidate_lines(stdout, "osra")
     warnings.extend(parse_warnings)
+    for value in values:
+        value["image_variant"] = image_variant.name
     return values, warnings
 
 
@@ -159,14 +166,21 @@ def parse_image(path: str, kind: str = "auto") -> dict:
             "warnings": [f"Image path does not exist: {image_path}"],
         }
     raw_candidates: list[dict[str, Any]] = []
-    for spec in adapter_specs_for_kind(kind):
-        values, adapter_warnings = _run_custom_adapter(spec, image_path)
-        raw_candidates.extend(values)
-        warnings.extend(adapter_warnings)
-    if not raw_candidates:
-        values, adapter_warnings = _run_osra(image_path)
-        raw_candidates.extend(values)
-        warnings.extend(adapter_warnings)
+    variant_set = build_ocsr_image_variants(image_path)
+    warnings.extend(variant_set.warnings)
+    try:
+        for spec in adapter_specs_for_kind(kind):
+            for image_variant in variant_set.variants:
+                values, adapter_warnings = _run_custom_adapter(spec, image_variant)
+                raw_candidates.extend(values)
+                warnings.extend(adapter_warnings)
+        if not raw_candidates:
+            for image_variant in variant_set.variants:
+                values, adapter_warnings = _run_osra(image_variant)
+                raw_candidates.extend(values)
+                warnings.extend(adapter_warnings)
+    finally:
+        variant_set.cleanup()
     candidates = []
     for candidate in _dedupe_candidates(raw_candidates):
         value = candidate.get("reaction_smiles") or candidate.get("smiles")
@@ -186,6 +200,7 @@ def parse_image(path: str, kind: str = "auto") -> dict:
                         "ocsr_tool": candidate.get("tool"),
                         "adapter_env": candidate.get("adapter_env"),
                         "adapter_confidence": adapter_confidence,
+                        "image_variant": candidate.get("image_variant"),
                     },
                     "warnings": [
                         "Reaction OCSR output is not fully validated; verify atom mapping, reagents, and stoichiometry manually.",
@@ -203,6 +218,7 @@ def parse_image(path: str, kind: str = "auto") -> dict:
         metadata["ocsr_tool"] = candidate.get("tool")
         metadata["adapter_env"] = candidate.get("adapter_env")
         metadata["adapter_confidence"] = adapter_confidence
+        metadata["image_variant"] = candidate.get("image_variant")
         metadata["raw_smiles"] = value_text
         for key in ("atoms", "bonds", "bboxes", "boxes", "labels"):
             if key in candidate:

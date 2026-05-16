@@ -131,6 +131,57 @@ def test_multi_adapter_ensemble_penalizes_low_confidence_label_artifacts(tmp_pat
     assert result["candidates"][0]["metadata"]["ocsr_tool"] == "molscribe"
 
 
+def test_ocsr_preprocessing_recovers_faint_skeletal_line_art(tmp_path, monkeypatch):
+    from PIL import Image, ImageDraw
+
+    image = tmp_path / "faint skeletal crop.png"
+    canvas = Image.new("RGB", (120, 70), "white")
+    draw = ImageDraw.Draw(canvas)
+    draw.line([(12, 45), (38, 25), (64, 45), (90, 25), (110, 36)], fill=(218, 218, 218), width=1)
+    draw.line([(64, 45), (64, 62)], fill=(218, 218, 218), width=1)
+    canvas.save(image)
+    raw_black_pixels = sum(canvas.convert("L").histogram()[:80])
+    assert raw_black_pixels == 0
+    assert max(canvas.size) < 500
+
+    adapter = tmp_path / "contrast_sensitive_adapter.py"
+    adapter.write_text(
+        "\n".join(
+            [
+                "import argparse, json",
+                "from PIL import Image",
+                "parser = argparse.ArgumentParser()",
+                "parser.add_argument('--input', required=True)",
+                "args = parser.parse_args()",
+                "img = Image.open(args.input).convert('L')",
+                "black_pixels = sum(img.histogram()[:80])",
+                "if black_pixels > 80 and max(img.size) >= 500:",
+                "    print(json.dumps({'tool': 'contrast-sensitive', 'smiles': 'CC(C)CO', 'confidence': 0.86}))",
+                "else:",
+                "    print(json.dumps({'tool': 'contrast-sensitive', 'smiles': 'C', 'confidence': 0.25}))",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for env_var in (
+        "CODEX_CHEM_MOLSCRIBE_CMD",
+        "CODEX_CHEM_DECIMER_CMD",
+        "CODEX_CHEM_MOLGRAPHER_CMD",
+        "CODEX_CHEM_OPENCHEMIE_CMD",
+        "CODEX_CHEM_CSR_CMD",
+        "CODEX_CHEM_RXNSCRIBE_CMD",
+    ):
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setenv("CODEX_CHEM_DECIMER_CMD", f"{shlex.quote(sys.executable)} {shlex.quote(str(adapter))} --input {{input}}")
+
+    result = chem_parse_image(str(image), kind="molecule")
+
+    assert result["candidates"][0]["canonical_smiles"] == "CC(C)CO"
+    assert result["candidates"][0]["metadata"]["ocsr_tool"] == "contrast-sensitive"
+    assert result["candidates"][0]["metadata"]["image_variant"] in {"high_contrast_binary", "high_contrast_thick"}
+    assert any("line-art variants" in warning for warning in result["warnings"])
+
+
 def test_ocsr_benchmark_reports_exact_match_with_fake_adapter(tmp_path, monkeypatch):
     image_dir = tmp_path / "crops"
     image_dir.mkdir()

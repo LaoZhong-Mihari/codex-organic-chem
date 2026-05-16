@@ -1,6 +1,6 @@
 ---
 name: organic-chemistry-assistant
-description: Use this skill when Codex needs to validate, draw, compute, parse, or explain organic molecules, reaction schemes, retrosynthesis ideas, or mechanisms with the local codex-organic-chem toolchain.
+description: Use this skill when Codex needs to validate, draw, compute, parse, or explain organic molecules, reaction schemes, structure-grounded reaction reasoning, retrosynthesis ideas, mechanisms, or literature-supported route screening with the local codex-organic-chem toolchain.
 metadata:
   short-description: Local organic chemistry reasoning tools for Codex
 ---
@@ -43,6 +43,11 @@ literature results.
 1. Convert images to machine-readable chemistry before reasoning.
    - Use `chem_parse_image(path, kind)` for a crop or `chem_parse_scheme(...)`
      for multi-compound schemes.
+   - For line-angle/skeletal formula crops, use clean molecule crops when
+     possible. `chem_parse_image` automatically tries white-background,
+     padded, high-contrast, and thickened line-art variants; inspect
+     `metadata.image_variant` to see whether recognition came from a
+     preprocessed crop.
    - Keep ranked candidates and warnings. For complex schemes, resolve visible
      `R`, `X`, `R1`, `R2`, and abbreviations with graph replacement, not string
      substitution.
@@ -62,6 +67,14 @@ literature results.
 - Draw only from validated structures using `chem_draw` or another
   chemistry-aware renderer. SVG/PIL/canvas may be used for page layout, but not
   for hand-drawing molecular bonds.
+- When a SMILES/Molfile is available, inspect the rendered full molecule before
+  proposing chemistry. Build a compact structure map: functional groups,
+  heteroatoms, pi systems, acidic/basic sites, electrophilic/nucleophilic sites,
+  leaving groups, protecting groups, steric congestion, stereochemical anchors,
+  and any groups that should stay untouched.
+- Reason from the structure map to local reactive sites. Do not infer a whole
+  mechanism from the molecule name, formula, or a remembered reaction pattern
+  without checking whether the required atoms and competing sites exist.
 - For reactions, use `chem_reaction_analyze` for sanity checks or high-level
   condition/retrosynthesis notes. Keep facts, tool output, literature evidence,
   rule-based inference, and LLM assumptions separate.
@@ -70,6 +83,29 @@ literature results.
   for explicit atom-mapped figure packages.
 - Do not pack disconnected reactants, counterions, or byproducts into one
   molecule entry when drawing mechanisms.
+
+## Mechanistic Reasoning
+
+Use a professional organic chemist workflow. Work stepwise internally, but report
+only concise checkpoints, evidence, and uncertainties.
+
+1. Establish the substrate and reagent roles from validated structures.
+2. Mark the likely reactive atoms/bonds and nearby groups that control
+   chemoselectivity, regioselectivity, stereoselectivity, or acid/base state.
+3. Enumerate plausible elementary events before choosing one: proton transfer,
+   coordination, addition, substitution, elimination, oxidative addition,
+   migration, redox, rearrangement, or catalyst turnover as appropriate.
+4. Check atom and charge accounting, conserved scaffolds, leaving groups,
+   counterions, and stereochemical consequences. If atom mapping is absent, say
+   which atoms must be mapped or experimentally confirmed.
+5. State why the proposed path beats close alternatives, especially when another
+   functional group could react under the same conditions.
+
+Use `chem_compute` when data can change the decision: descriptors for polarity
+and HBD/HBA context; conformers for steric accessibility; charges for likely
+nucleophilic/electrophilic atoms; xTB/CREST only for geometry, charge, or rough
+relative-energy questions worth the cost. Present computed values as screening
+evidence, not proof.
 
 ## Publication Figures
 
@@ -98,8 +134,18 @@ Use this section for manuscript-ready schemes or mechanisms.
 - Offer the best route plus realistic alternatives. Explain why alternatives may
   fail: chemoselectivity, redox mismatch, regio/stereocontrol, leaving groups,
   protecting groups, isolation, solubility, or safety.
-- Use `chem_literature_search` for unusual or route-defining steps. Cite
-  DOI/title/journal/year when available; otherwise say the support is weak.
+- For route screening, generate a broad candidate set first, then narrow to the
+  few highest-potential paths using structural fit, functional-group tolerance,
+  step economy, selectivity risk, redox/protecting-group burden, precedent, and
+  practical availability of starting materials.
+- Use `chem_literature_search` for unusual, route-defining, or disputed steps.
+  Search exact transformations when possible, then broaden to analogous
+  reaction classes, same functional group interconversions, same catalyst or
+  reagent family, and similar substrate classes. Cite DOI/title/journal/year
+  when available; otherwise say the support is weak.
+- Separate literature strength levels: exact substrate precedent, close analog,
+  same reaction class on different scaffold, general review/method paper, and
+  unsupported inference.
 - Use computation only when it can answer the question. RDKit/xTB/CREST are
   screening evidence, not proof of a mechanism or transition state.
 - For wet-lab advice, stay at high-level condition families unless the user has

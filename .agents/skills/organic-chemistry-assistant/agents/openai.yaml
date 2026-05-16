@@ -1,3 +1,3 @@
 display_name: Organic Chemistry Assistant
-short_description: Understand, validate, directly render, compute, and explain organic chemistry with local tools.
-default_prompt: Use the local codex-organic-chem tools to parse structures, validate molecules, directly render chemistry figures from structure inputs, analyze reactions, and draft mechanisms with clear tool facts, rule inferences, and assumptions.
+short_description: Validate, render, compute, and reason through organic chemistry from structure.
+default_prompt: Use the local codex-organic-chem tools to parse and validate structures, render full molecules before reasoning, map functional groups and reactive sites, analyze reactions stepwise with clear evidence, use computation when it can discriminate paths, and support route screening with exact or analogous literature.

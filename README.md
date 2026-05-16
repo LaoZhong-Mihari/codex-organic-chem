@@ -278,11 +278,15 @@ open-command templates, but does not assume unattended ChemDraw GUI automation.
 
 Custom OCSR command variables may contain `{input}` and should print JSON with a
 `smiles`, `canonical_smiles`, `reaction_smiles`, or `molfile` field, a JSON
-`candidates` list, or plain SMILES lines. `codex-chem parse-image` runs all
-configured adapters for the requested kind, ranks sanitized candidates while
-penalizing collapsed tiny outputs and low-confidence label-artifact atoms,
-and preserves raw tool metadata/warnings instead of forcing a single merged
-answer.
+`candidates` list, or plain SMILES lines. For line-angle/skeletal molecule
+crops, `codex-chem parse-image` also tries white-background, padded,
+high-contrast, and thickened line-art image variants before ranking candidates.
+Configured adapters may therefore be called more than once per crop and should
+be idempotent. The winning candidate records `metadata.image_variant` so poor
+raw-crop recognition can be traced back to a preprocessing variant. Candidate
+ranking still penalizes collapsed tiny outputs and low-confidence label-artifact
+atoms, and preserves raw tool metadata/warnings instead of forcing a single
+merged answer.
 
 Scheme-level OCSR helpers:
 
@@ -331,6 +335,8 @@ export CODEX_CHEM_OPENCHEMIE_CMD='your-openchemie-command --input {input}'
 export CODEX_CHEM_CSR_CMD='your-chemschematicresolver-command --input {input}'
 export CODEX_CHEM_ENABLE_CSR_DEFAULT=1
 export CODEX_CHEM_RXNSCRIBE_CMD='your-rxnscribe-command --input {input}'
+export CODEX_CHEM_DISABLE_IMAGE_PREPROCESSING=1
+export CODEX_CHEM_KEEP_PREPROCESSED_IMAGES=1
 export CODEX_CHEM_CHEMDRAW_APP="/Applications/ChemDraw.app"
 export CODEX_CHEM_CHEMDOODLE_APP="/Applications/ChemDoodle.app"
 export CODEX_CHEM_MARVIN_APP="/Applications/MarvinSketch.app"
