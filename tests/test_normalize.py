@@ -3,7 +3,7 @@ import shlex
 import sys
 from pathlib import Path
 
-from codex_organic_chem.scheme_ocsr import resolve_placeholders, route_consistency_warnings
+from codex_organic_chem.scheme_ocsr import rank_candidates, resolve_placeholders, route_consistency_warnings
 from codex_organic_chem.ocsr import _parse_candidate_lines
 from codex_organic_chem.service import (
     chem_draw,
@@ -180,6 +180,28 @@ def test_ocsr_preprocessing_recovers_faint_skeletal_line_art(tmp_path, monkeypat
     assert result["candidates"][0]["metadata"]["ocsr_tool"] == "contrast-sensitive"
     assert result["candidates"][0]["metadata"]["image_variant"] in {"high_contrast_binary", "high_contrast_thick"}
     assert any("line-art variants" in warning for warning in result["warnings"])
+
+
+def test_candidate_ranking_prefers_original_crop_for_stereo_tie():
+    original = {
+        "canonical_smiles": "[H]C(C)(OS(C)(=O)=O)C(=O)c1ccc(C(C)(C)C)cc1",
+        "isomeric_smiles": "[H][C@@](C)(OS(C)(=O)=O)C(=O)c1ccc(C(C)(C)C)cc1",
+        "confidence": 0.868,
+        "metadata": {"image_variant": "original"},
+        "warnings": [],
+    }
+    preprocessed = {
+        "canonical_smiles": "[H]C(C)(OS(C)(=O)=O)C(=O)c1ccc(C(C)(C)C)cc1",
+        "isomeric_smiles": "[H][C@](C)(OS(C)(=O)=O)C(=O)c1ccc(C(C)(C)C)cc1",
+        "confidence": 0.879,
+        "metadata": {"image_variant": "white_padded"},
+        "warnings": [],
+    }
+
+    ranked = rank_candidates([preprocessed, original])
+
+    assert ranked[0]["metadata"]["image_variant"] == "original"
+    assert ranked[0]["isomeric_smiles"] == original["isomeric_smiles"]
 
 
 def test_ocsr_benchmark_reports_exact_match_with_fake_adapter(tmp_path, monkeypatch):

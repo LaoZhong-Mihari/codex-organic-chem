@@ -181,6 +181,13 @@ def _candidate_score(record: dict[str, Any], *, max_heavy_atom_count: int | None
         score -= 0.35
     warnings = record.get("warnings") or []
     score -= min(len(warnings), 6) * 0.08
+    metadata = record.get("metadata", {}) if isinstance(record.get("metadata"), dict) else {}
+    image_variant = metadata.get("image_variant")
+    if image_variant and image_variant != "original":
+        # Preprocessed variants often rescue faint skeletons, but can disturb
+        # wedge/dash geometry. Let them win on graph quality, not on tiny score
+        # ties against the original crop.
+        score -= 0.2
     return score
 
 
