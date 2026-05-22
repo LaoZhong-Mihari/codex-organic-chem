@@ -19,7 +19,11 @@ from .service import (
     chem_parse_image,
     chem_parse_scheme,
     chem_reaction_analyze,
+    chem_route_figure,
+    chem_route_figure_spec_example,
     chem_synthesis_suggest,
+    chem_structure_review_batch,
+    chem_structure_review_result,
     chem_tool_doctor,
 )
 from .scheme_ocsr import benchmark_to_tsv
@@ -57,6 +61,17 @@ def build_parser() -> argparse.ArgumentParser:
     group.add_argument("--image-path")
     p.add_argument("--kind", choices=["auto", "molecule", "reaction"], default="auto")
 
+    p = sub.add_parser("review-batch", help="Start a local Ketcher batch review session for molecule SMILES")
+    p.add_argument("--input", required=True, help="JSON file containing a list of review items or an object with an items list")
+    p.add_argument("--wait", action="store_true", help="Wait until the browser review session completes or times out")
+    p.add_argument("--timeout-s", type=int, default=1800, help="Review session timeout in seconds")
+
+    p = sub.add_parser("review-result", help="Fetch or wait for a local Ketcher review session result")
+    p.add_argument("--session-id", required=True)
+    p.add_argument("--review-token")
+    p.add_argument("--wait", action="store_true")
+    p.add_argument("--timeout-s", type=int, default=1800)
+
     p = sub.add_parser("normalize", help="Normalize SMILES or Molfile into a MoleculeRecord")
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument("--smiles")
@@ -88,6 +103,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("mechanism-render", help="Render an explicit atom-mapped mechanism canvas with intermediates, lone pairs, charges, and arrows")
     p.add_argument("--spec", help="Path to mechanism spec JSON. Omit with --example to print an example spec.")
     p.add_argument("--output-dir")
+    p.add_argument("--example", action="store_true")
+
+    p = sub.add_parser("route-figure", help="Render a publication-style route/scheme figure from a JSON spec")
+    p.add_argument("--spec", help="Path to route figure spec JSON. Omit with --example to print an example spec.")
+    p.add_argument("--output-dir")
+    p.add_argument("--basename", default="route_figure")
+    p.add_argument("--format", action="append", choices=["svg", "png"], dest="formats")
     p.add_argument("--example", action="store_true")
 
     p = sub.add_parser("literature-search", help="Search literature metadata for chemistry evidence")
@@ -131,6 +153,31 @@ def main(argv: list[str] | None = None) -> None:
             image_path=args.image_path,
             kind=args.kind,
         )
+    elif args.command == "review-batch":
+        with open(args.input, encoding="utf-8") as handle:
+            review_payload = json.load(handle)
+        items = review_payload.get("items") if isinstance(review_payload, dict) else review_payload
+        payload = chem_structure_review_batch(items=items, wait=False, timeout_s=args.timeout_s)
+        if args.wait:
+            sys.stderr.write(f"Review URL: {payload['review_url']}\n")
+            sys.stderr.flush()
+            payload = chem_structure_review_result(
+                session_id=payload["session_id"],
+                review_token=payload.get("review_token"),
+                wait=True,
+                timeout_s=args.timeout_s,
+            )
+        else:
+            payload.setdefault("warnings", []).append(
+                "CLI review server exits with this command; use --wait or call through the long-running MCP server."
+            )
+    elif args.command == "review-result":
+        payload = chem_structure_review_result(
+            session_id=args.session_id,
+            review_token=args.review_token,
+            wait=args.wait,
+            timeout_s=args.timeout_s,
+        )
     elif args.command == "normalize":
         payload = chem_normalize_structure(smiles=args.smiles, molfile=args.molfile)
     elif args.command == "draw":
@@ -160,6 +207,20 @@ def main(argv: list[str] | None = None) -> None:
             with open(args.spec, encoding="utf-8") as handle:
                 spec = json.load(handle)
             payload = chem_mechanism_render(spec=spec, output_dir=args.output_dir)
+    elif args.command == "route-figure":
+        if args.example:
+            payload = chem_route_figure_spec_example()
+        elif not args.spec:
+            payload = {"status": "error", "warnings": ["Provide --spec path or use --example."]}
+        else:
+            with open(args.spec, encoding="utf-8") as handle:
+                spec = json.load(handle)
+            payload = chem_route_figure(
+                spec=spec,
+                output_dir=args.output_dir,
+                basename=args.basename,
+                formats=args.formats,
+            )
     elif args.command == "literature-search":
         payload = chem_literature_search(args.query, rows=args.rows)
     elif args.command == "synthesis-suggest":

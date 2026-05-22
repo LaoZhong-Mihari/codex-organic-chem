@@ -12,6 +12,11 @@ chemistry claims. Treat tool output as evidence, not as automatic truth: render
 uncertain structures, state warnings, and label unverified mechanism or synthesis
 ideas as hypotheses.
 
+When this skill is active, any request to render, show, export, or "give me" a
+chemistry image is a chemical-figure task, not a generic screenshot/conversion
+task. Follow the Chemical Figure Output Protocol below before returning SVG,
+PNG, PDF, or other visual files.
+
 Check capabilities only when the task needs optional tools:
 
 ```bash
@@ -56,9 +61,15 @@ literature results.
    - Run route-consistency checks when adjacent intermediates should preserve a
      scaffold, ring size, stereochemical anchor, or arene substitution pattern.
 2. Before synthesis, mechanism, calculation, or final claims, render the selected
-   candidate with `chem_input_review` and wait for explicit user confirmation.
+   candidate with `chem_input_review` or, for multiple molecule SMILES, use
+   `chem_structure_review_batch` to open a local Ketcher correction queue and
+   `chem_structure_review_result` to wait for explicit user confirmation.
 3. Never infer stereochemistry from an image unless the parsed structure and
    rendered preview make it explicit.
+4. Before returning a chemistry image artifact to the user, apply the Chemical
+   Figure Output Protocol. Do not treat PNG/SVG export as a mere file-format
+   conversion unless the source file was already generated and checked by that
+   protocol in the same unchanged task.
 
 ## Structure And Reaction Flow
 
@@ -83,6 +94,77 @@ literature results.
   for explicit atom-mapped figure packages.
 - Do not pack disconnected reactants, counterions, or byproducts into one
   molecule entry when drawing mechanisms.
+
+## Chemical Figure Output Protocol
+
+Use this protocol for every chemistry image the assistant returns, including
+single structures, reaction schemes, mechanisms, PNG conversions, SVG files,
+and visual previews in the final answer.
+
+1. Start from confirmed machine-readable chemistry.
+   - For user-provided SMILES/Molfile/Rxnfile, normalize it first.
+   - For screenshot or literature-image input, parse or manually transcribe the
+     structures, then open `chem_input_review` or `chem_structure_review_batch`
+     and wait for explicit confirmation or correction before making a final
+     image.
+   - If the user explicitly asks for a rough, unreviewed draft, label the output
+     as a draft and do not describe it as final, checked, or publication-ready.
+2. Render with a chemistry-aware renderer.
+   - Use `chem_draw`, `chem_mechanism_render`, ChemDraw/CDXML/ChemDoodle/Marvin,
+     or another chemistry-aware renderer for molecules, bonds, atom labels,
+     reaction arrows, and mechanism arrows.
+   - SVG/PIL/canvas/browser screenshots may be used only for page composition,
+     rasterization, or previewing a chemistry-aware master. They must not be the
+     source of chemical bonds or arrows.
+3. Use publication-style defaults unless the user asks for a sketch.
+   - Black structures on a white background.
+   - Standard bond lengths and restrained line widths.
+   - Readable atom labels, condition labels, and compound labels.
+   - Reaction arrows centered and visually separate from structures.
+   - No UI chrome, browser bars, decorative cards, gradients, explanatory prose,
+     or oversized whitespace inside the graphic.
+   - Put longer explanation in the answer or caption, not in the drawing.
+   - For route/scheme figures, reuse the existing route-figure drawing scripts,
+     helpers, and templates from this skill/repository when available. Do not
+     invent a new visual style from a reference image.
+4. Keep a vector master and derive raster outputs from it.
+   - Prefer SVG/CDXML as the master output.
+   - If PNG is requested, generate it from the checked vector master after the
+     visual QA step, not from an unchecked earlier draft.
+   - When both are useful, return both the vector master and PNG.
+5. Inspect the final artifact before returning it.
+   - Open or render the final file and check that all structures are visible,
+     not clipped, not overlapping, chemically legible, and consistent with the
+     confirmed SMILES/Molfile/Rxnfile.
+   - If the artifact fails the visual check, regenerate or clearly report the
+     blocker instead of returning the broken image.
+6. Report artifact status precisely.
+   - Say whether the image is confirmed/reviewed, draft, or blocked.
+   - Include important warnings such as uncertain stereochemistry, missing
+     atom-mapping, unsupported organometallics, or skipped human review.
+
+## Route Figure Rendering
+
+For route, reaction-scheme, synthesis-scheme, multi-step transformation, or
+final PNG/SVG figure requests, default to the existing drawing behavior that is
+already part of this skill/repository. Use `chem_route_figure` or
+`codex-chem route-figure` for final route/scheme images unless the user asks
+for a compact reaction preview or a different renderer.
+
+- Only depend on renderer code, templates, and assets that are packaged with
+  this repository or the installed skill. Do not rely on local files from
+  unrelated Codex work directories, screenshots, or absolute paths that a GitHub
+  user will not have.
+- Preserve the packaged route renderer's existing layout conventions,
+  typography, molecule placement, arrow handling, labels, and footer-note
+  behavior unless the user asks for a different format.
+- Use RDKit's one-call reaction drawer only for quick previews or internal
+  sanity checks. For final route/scheme images, use the packaged composed-SVG
+  route renderer.
+- If `chem_route_figure` cannot express a required layout, create the smallest
+  extension to the packaged renderer rather than writing a one-off local script.
+- Do not infer a new house style from one reference image when an existing
+  packaged renderer or skill behavior already defines the expected format.
 
 ## Mechanistic Reasoning
 
@@ -109,7 +191,9 @@ evidence, not proof.
 
 ## Publication Figures
 
-Use this section for manuscript-ready schemes or mechanisms.
+Use this section for manuscript-ready schemes or mechanisms. The Chemical
+Figure Output Protocol above still applies to ordinary chemistry image output;
+this section adds stricter mechanism and manuscript requirements.
 
 - Prefer ChemDraw ACS-style defaults when available: black structures, restrained
   arrows, standard bond lengths/line widths, readable final lettering, vector
@@ -159,6 +243,8 @@ uv run codex-chem draw --smiles "c1ccccc1C(=O)O" --output svg
 uv run codex-chem parse-image crop.png --kind molecule
 uv run codex-chem parse-scheme --image scheme.png --crops ocsr_crops --gold-map legend.json
 uv run codex-chem input-review --reaction-smiles "CBr.[OH-]>>CO.[Br-]"
+uv run codex-chem review-batch --input reviews.json --wait
+uv run codex-chem route-figure --spec route_figure.spec.json --output-dir route_out --format svg --format png
 uv run codex-chem reaction-analyze --reaction "CBr.[OH-]>>CO.[Br-]" --mode sanity_check
 uv run codex-chem compute --smiles "CCO" --task descriptors --task conformers
 uv run codex-chem mechanism-render --spec mechanism.spec.json --output-dir mechanism_out
@@ -169,6 +255,13 @@ uv run codex-chem synthesis-suggest --target-smiles "CC(=O)Oc1ccccc1C(=O)O" --co
 
 - Do not present raw OCSR as confirmed chemistry.
 - Do not present retrosynthesis hints as validated routes.
+- Do not return chemistry PNG/SVG/PDF artifacts made by merely screenshotting or
+  converting an unchecked draft; rerun the Chemical Figure Output Protocol first.
+- Do not call a chemical image final or publication-style unless the structures
+  were normalized, visually reviewed, and the final artifact was inspected.
+- Do not make route figures as cramped single-line reaction snapshots when the
+  user asks for a rendered scheme or final image; reuse the existing route
+  figure renderer unless the user explicitly requests a compact preview.
 - Do not call mechanism drafts publication-ready unless the input was confirmed
   and `publication_package.publication_ready` is true.
 - Do not let optional tool absence become a hallucination source.

@@ -115,6 +115,9 @@ chemistry figures. They are not required for the Python tests.
 - Ketcher: open-source structure/reaction correction gate. Use the bundled
   Vite integration or set `CODEX_CHEM_KETCHER_URL` /
   `CODEX_CHEM_KETCHER_DIST`.
+  `chem_structure_review_batch` uses the same integration for localhost batch
+  review sessions and serves the built `dist` directly when no URL override is
+  configured.
 - Inkscape or Adobe Illustrator: optional final vector-polish tools. They do
   not validate chemistry.
 
@@ -163,6 +166,10 @@ npm run preview -- --port 4173
 
 `node_modules/` and `dist/` are intentionally ignored and should be rebuilt
 from `package-lock.json`.
+
+The batch review API itself uses only Python's standard library and listens on
+`127.0.0.1`. When `CODEX_CHEM_KETCHER_URL` is not set, the review server serves
+`integrations/ketcher/dist` at the same localhost origin as the API.
 
 ## Network access
 

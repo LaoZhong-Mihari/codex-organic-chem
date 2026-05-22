@@ -19,8 +19,10 @@ from .rdkit_tools import (
     reaction_to_svg,
 )
 from .reaction import analyze_reaction
+from .route_figure import render_route_figure, route_figure_spec_example
 from .scheme_ocsr import benchmark_ocsr, parse_scheme
 from .synthesis import suggest_synthesis_path
+from .structure_review import review_session_result, start_structure_review_batch
 
 
 def chem_parse_image(path: str, kind: str = "auto") -> dict[str, Any]:
@@ -49,6 +51,23 @@ def chem_input_review(
         image_path=image_path,
         kind=kind,
     )
+
+
+def chem_structure_review_batch(
+    items: list[dict[str, Any]],
+    wait: bool = False,
+    timeout_s: int = 1800,
+) -> dict[str, Any]:
+    return start_structure_review_batch(items=items, wait=wait, timeout_s=timeout_s)
+
+
+def chem_structure_review_result(
+    session_id: str,
+    review_token: str | None = None,
+    wait: bool = False,
+    timeout_s: int = 1800,
+) -> dict[str, Any]:
+    return review_session_result(session_id=session_id, token=review_token, wait=wait, timeout_s=timeout_s)
 
 
 def chem_normalize_structure(smiles: str | None = None, molfile: str | None = None) -> dict[str, Any]:
@@ -173,6 +192,19 @@ def chem_mechanism_render(spec: dict[str, Any], output_dir: str | None = None) -
 
 def chem_mechanism_spec_example() -> dict[str, Any]:
     return mechanism_spec_example()
+
+
+def chem_route_figure(
+    spec: dict[str, Any],
+    output_dir: str | None = None,
+    basename: str = "route_figure",
+    formats: list[str] | None = None,
+) -> dict[str, Any]:
+    return render_route_figure(spec=spec, output_dir=output_dir, basename=basename, formats=formats)
+
+
+def chem_route_figure_spec_example() -> dict[str, Any]:
+    return route_figure_spec_example()
 
 
 def chem_synthesis_suggest(

@@ -76,8 +76,12 @@ The MCP tools have the planned names:
 - `chem_mechanism_draft`
 - `chem_mechanism_render`
 - `chem_mechanism_spec_example`
+- `chem_route_figure`
+- `chem_route_figure_spec_example`
 - `chem_figure_tool_status`
 - `chem_input_review`
+- `chem_structure_review_batch`
+- `chem_structure_review_result`
 - `chem_literature_search`
 - `chem_synthesis_suggest`
 
@@ -91,6 +95,31 @@ explicit user confirmation before continuing.
 codex-chem input-review --image-path scheme.png --kind reaction
 codex-chem input-review --smiles "CC(=O)Oc1ccccc1C(=O)O"
 ```
+
+For multiple molecule SMILES that need human correction, start a local Ketcher
+review queue instead of copying rendered SVGs by hand:
+
+```bash
+cat > reviews.json <<'JSON'
+{
+  "items": [
+    {"id": "cmpd-1", "label": "compound 1", "smiles": "CCO"},
+    {"id": "cmpd-2", "label": "compound 2", "smiles": "c1ccccc1C(=O)O"}
+  ]
+}
+JSON
+codex-chem review-batch --input reviews.json --wait
+```
+
+With `--wait`, the command prints a localhost `review_url` to stderr, waits
+while that URL remains live, and returns the final JSON after the queue is
+finished or times out. MCP callers can also call
+`chem_structure_review_batch(..., wait=false)` to get a URL, then later call
+`chem_structure_review_result(session_id, review_token, wait=true)` to collect
+the same result. Confirmed and modified structures return per-item
+`confirmed`, `modified`, `skipped`, or `error` results. Confirmed and modified
+structures are re-normalized through RDKit before downstream reasoning sees
+canonical/isomeric SMILES, Molfile, InChIKey, warnings, and metadata.
 
 Downstream publication mechanisms, synthesis suggestions, expensive
 calculations, and literature-backed route expansion should only run after the
@@ -195,6 +224,29 @@ while nonreacting heteroatom lone pairs and product lone pairs stay hidden.
 Use full lone-pair counts only for teaching, debugging, or when the chemistry
 requires them.
 
+## Route Figures
+
+Route and reaction-scheme figures are a first-class skill capability. Use
+`route-figure` when the desired output is the composed publication-style route
+figure format rather than a compact RDKit reaction preview.
+
+```bash
+codex-chem route-figure --example
+codex-chem route-figure --spec route_figure.spec.json --output-dir route_out --format svg --format png
+```
+
+The route spec is JSON with a `rows` list. Each row contains ordered `items`:
+molecule items with reviewed `smiles` or `molfile`, `arrow` items with a main
+label and optional sublabel, and optional `plus` or short `text` items. The
+renderer validates and normalizes every molecule through RDKit, composes a
+single SVG master from independent molecule fragments, and writes PNG output
+from that SVG when a local rasterizer such as Chrome, Inkscape, ImageMagick, or
+`rsvg-convert` is available.
+
+This makes the route-figure format reproducible for users who install the
+GitHub repository; it is no longer dependent on unrelated local scripts or
+one-off prompt reconstruction.
+
 ### Optional editor integrations
 
 Ketcher can be built locally from the bundled integration:
@@ -209,6 +261,9 @@ npm run preview -- --port 4173
 `codex-chem figure-tools` auto-detects `integrations/ketcher/dist` after a
 local build. The repository commits `package.json` and `package-lock.json`, but
 ignores `node_modules/` and `dist/`.
+`chem_structure_review_batch` can serve that built `dist` directly from its
+local review server, or it can target a running Vite/Ketcher URL when
+`CODEX_CHEM_KETCHER_URL` is set.
 
 ChemDoodle Web Components are detected from `integrations/chemdoodle` or
 `CODEX_CHEM_CHEMDOODLE_WEB_DIR`; the renderer writes

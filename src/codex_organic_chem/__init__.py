@@ -14,6 +14,10 @@ from .service import (
     chem_parse_image,
     chem_parse_scheme,
     chem_reaction_analyze,
+    chem_route_figure,
+    chem_route_figure_spec_example,
+    chem_structure_review_batch,
+    chem_structure_review_result,
     chem_synthesis_suggest,
     chem_tool_doctor,
 )
@@ -32,6 +36,10 @@ __all__ = [
     "chem_parse_image",
     "chem_parse_scheme",
     "chem_reaction_analyze",
+    "chem_route_figure",
+    "chem_route_figure_spec_example",
+    "chem_structure_review_batch",
+    "chem_structure_review_result",
     "chem_synthesis_suggest",
     "chem_tool_doctor",
 ]

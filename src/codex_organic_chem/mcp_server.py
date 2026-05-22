@@ -17,7 +17,11 @@ from .service import (
     chem_parse_image as _chem_parse_image,
     chem_parse_scheme as _chem_parse_scheme,
     chem_reaction_analyze as _chem_reaction_analyze,
+    chem_route_figure as _chem_route_figure,
+    chem_route_figure_spec_example as _chem_route_figure_spec_example,
     chem_synthesis_suggest as _chem_synthesis_suggest,
+    chem_structure_review_batch as _chem_structure_review_batch,
+    chem_structure_review_result as _chem_structure_review_result,
     chem_tool_doctor as _chem_tool_doctor,
 )
 
@@ -60,6 +64,28 @@ def main() -> None:
             molfile=molfile,
             image_path=image_path,
             kind=kind,
+        )
+
+    @mcp.tool()
+    def chem_structure_review_batch(
+        items: list[dict[str, Any]],
+        wait: bool = False,
+        timeout_s: int = 1800,
+    ) -> dict[str, Any]:
+        return _chem_structure_review_batch(items=items, wait=wait, timeout_s=timeout_s)
+
+    @mcp.tool()
+    def chem_structure_review_result(
+        session_id: str,
+        review_token: str | None = None,
+        wait: bool = False,
+        timeout_s: int = 1800,
+    ) -> dict[str, Any]:
+        return _chem_structure_review_result(
+            session_id=session_id,
+            review_token=review_token,
+            wait=wait,
+            timeout_s=timeout_s,
         )
 
     @mcp.tool()
@@ -121,6 +147,19 @@ def main() -> None:
     @mcp.tool()
     def chem_mechanism_spec_example() -> dict[str, Any]:
         return _chem_mechanism_spec_example()
+
+    @mcp.tool()
+    def chem_route_figure(
+        spec: dict[str, Any],
+        output_dir: str | None = None,
+        basename: str = "route_figure",
+        formats: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return _chem_route_figure(spec=spec, output_dir=output_dir, basename=basename, formats=formats)
+
+    @mcp.tool()
+    def chem_route_figure_spec_example() -> dict[str, Any]:
+        return _chem_route_figure_spec_example()
 
     @mcp.tool()
     def chem_synthesis_suggest(
