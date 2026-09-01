@@ -57,6 +57,7 @@ def main() -> None:
         molfile: str | None = None,
         image_path: str | None = None,
         kind: str = "auto",
+        interactive: bool = True,
     ) -> dict[str, Any]:
         return _chem_input_review(
             smiles=smiles,
@@ -64,6 +65,7 @@ def main() -> None:
             molfile=molfile,
             image_path=image_path,
             kind=kind,
+            interactive=interactive,
         )
 
     @mcp.tool()
@@ -107,8 +109,23 @@ def main() -> None:
         tasks: list[str] | None = None,
         num_confs: int = 8,
         max_iters: int = 200,
+        solvent: str | None = None,
+        timeout_s: int | None = None,
     ) -> dict[str, Any]:
-        return _chem_compute(smiles=smiles, tasks=tasks, num_confs=num_confs, max_iters=max_iters)
+        """Run RDKit or GFN2-xTB/CREST calculations and return structure-mapped numbers.
+
+        tasks: descriptors, conformers, charges, xtb_opt, xtb_reactivity,
+        xtb_thermo, crest. xtb_reactivity returns per-atom Fukui indices and
+        partial charges keyed to RDKit atom indices; solvent is an ALPB name.
+        """
+        return _chem_compute(
+            smiles=smiles,
+            tasks=tasks,
+            num_confs=num_confs,
+            max_iters=max_iters,
+            solvent=solvent,
+            timeout_s=timeout_s,
+        )
 
     @mcp.tool()
     def chem_tool_doctor() -> dict[str, Any]:

@@ -1,8 +1,9 @@
 # Dependencies
 
-This repository contains three related parts:
+This repository contains four related parts:
 
 - the `organic-chemistry-assistant` Codex skill in `.agents/skills/organic-chemistry-assistant`,
+- its synchronized Claude Code mirror in `.claude/skills/organic-chemistry-assistant`,
 - the `codex-organic-chem` Python CLI/MCP package in `src/codex_organic_chem`,
 - optional local editor integrations under `integrations/`.
 
@@ -39,18 +40,21 @@ uv run pytest
 
 The build backend is `hatchling>=1.25`.
 
-## Codex skill files
+## Codex and Claude Code skill files
 
 The skill itself has no separate package manager. It depends on this repository's
 CLI/MCP tools being available in the same environment:
 
 - `.agents/skills/organic-chemistry-assistant/SKILL.md`
 - `.agents/skills/organic-chemistry-assistant/agents/openai.yaml`
+- `.claude/skills/organic-chemistry-assistant/SKILL.md`
 - `.mcp.json`, which launches `uv run codex-chem-mcp`
 
-To install the skill into another Codex setup, copy or symlink the
-`.agents/skills/organic-chemistry-assistant` folder into that setup's skills
-directory and make sure `codex-chem` / `codex-chem-mcp` run from this project.
+Codex installs the `.agents` version into its skills directory. Claude Code
+discovers the `.claude/skills` mirror while working in this repository and uses
+the project-level `.mcp.json`. In either environment, make sure `codex-chem` /
+`codex-chem-mcp` run from this project. A regression test prevents the two
+`SKILL.md` files from drifting.
 
 ## Optional external chemistry tools
 
@@ -59,9 +63,13 @@ the task needs them; `codex-chem doctor` reports what is configured locally.
 
 - Open Babel: executable `obabel`; used for structure conversion and CDXML/SDF
   workflows. macOS: `brew install open-babel`.
-- xTB: executable `xtb`; used by `chem_compute --task xtb_opt`. macOS:
+- xTB: executable `xtb`; used by `chem_compute --task xtb_opt`,
+  `--task xtb_reactivity`, and `--task xtb_thermo`. These run real GFN2-xTB
+  optimization/energy, atom-mapped charge and Fukui calculations, and
+  frequency/free-energy calculations. macOS:
   `brew tap grimme-lab/qc && brew install xtb`.
-- CREST: executable `crest`; used by `chem_compute --task crest`. macOS:
+- CREST: executable `crest`; used by `chem_compute --task crest` for a real
+  conformer search with ensemble energies and Boltzmann populations. macOS:
   `brew tap grimme-lab/qc && brew install crest`. The bundled installer falls
   back to a micromamba conda-forge environment at
   `~/.local/share/codex-organic-chem/conda-tools`.
@@ -117,7 +125,9 @@ chemistry figures. They are not required for the Python tests.
   `CODEX_CHEM_KETCHER_DIST`.
   `chem_structure_review_batch` uses the same integration for localhost batch
   review sessions and serves the built `dist` directly when no URL override is
-  configured.
+  configured. If no Ketcher build or URL exists, the same review API serves a
+  dependency-free built-in editor with server-side RDKit previews. Review
+  sessions open in the default browser unless disabled.
 - Inkscape or Adobe Illustrator: optional final vector-polish tools. They do
   not validate chemistry.
 
@@ -143,6 +153,7 @@ export CODEX_CHEM_MARVIN_APP="/Applications/MarvinSketch.app"
 export CODEX_CHEM_MARVIN_JS_DIR="/path/to/marvin-js"
 export CODEX_CHEM_KETCHER_URL="http://localhost:8080"
 export CODEX_CHEM_KETCHER_DIST="/path/to/ketcher/build"
+export CODEX_CHEM_REVIEW_OPEN_BROWSER=0
 ```
 
 ## Ketcher frontend integration
@@ -169,7 +180,10 @@ from `package-lock.json`.
 
 The batch review API itself uses only Python's standard library and listens on
 `127.0.0.1`. When `CODEX_CHEM_KETCHER_URL` is not set, the review server serves
-`integrations/ketcher/dist` at the same localhost origin as the API.
+`integrations/ketcher/dist` at the same localhost origin as the API; if that
+build is absent, it serves the built-in review editor instead. CLI callers must
+use `input-review --wait` or `review-batch --wait` to keep the daemon-backed
+localhost server alive for the duration of interactive review.
 
 ## Network access
 

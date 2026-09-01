@@ -47,7 +47,13 @@ def _mol_from_smiles(smiles: str) -> Any:
     return Chem.MolFromSmiles(smiles)
 
 
-def _element_counter(smiles_values: list[str]) -> Counter:
+def _atom_counter(smiles_values: list[str]) -> Counter:
+    """Count every atom, hydrogens included.
+
+    GetAtoms() on a SMILES-parsed mol does not yield implicit hydrogens, so
+    counting symbols alone calls CC(=O)C >> CC(O)C balanced even though the
+    product gained two H. GetTotalNumHs() restores them.
+    """
     counter: Counter = Counter()
     if not RDKIT_AVAILABLE:
         return counter
@@ -57,7 +63,133 @@ def _element_counter(smiles_values: list[str]) -> Counter:
             continue
         for atom in mol.GetAtoms():
             counter[atom.GetSymbol()] += 1
-    return counter
+            counter["H"] += atom.GetTotalNumHs()
+    return +counter
+
+
+def _charge_total(smiles_values: list[str]) -> int:
+    total = 0
+    if not RDKIT_AVAILABLE:
+        return total
+    for smi in smiles_values:
+        mol = _mol_from_smiles(smi)
+        if mol is None:
+            continue
+        total += sum(atom.GetFormalCharge() for atom in mol.GetAtoms())
+    return total
+
+
+def _counter_delta(left: Counter, right: Counter) -> dict[str, int]:
+    return {
+        key: right.get(key, 0) - left.get(key, 0)
+        for key in sorted(set(left) | set(right))
+        if right.get(key, 0) != left.get(key, 0)
+    }
+
+
+def _formula(counter: Counter) -> str:
+    if not counter:
+        return ""
+    pieces = []
+    for symbol in ("C", "H"):
+        count = counter.get(symbol, 0)
+        if count:
+            pieces.append(f"{symbol}{count if count > 1 else ''}")
+    for symbol in sorted(key for key in counter if key not in {"C", "H"} and counter[key]):
+        count = counter[symbol]
+        pieces.append(f"{symbol}{count if count > 1 else ''}")
+    return "".join(pieces)
+
+
+def _delta_text(delta: dict[str, int]) -> str:
+    return ", ".join(f"{symbol}{value:+d}" for symbol, value in delta.items())
+
+
+def mass_charge_balance(parts: ReactionParts) -> dict:
+    """Full mass and charge accounting for a written reaction.
+
+    Reported deltas are product minus reactant. Two variants are computed
+    because reagents written between the '>' separators may be catalysts
+    (excluding them balances) or stoichiometric partners (including them
+    balances); the reaction is only flagged when neither variant closes.
+    """
+    if not RDKIT_AVAILABLE:
+        return {
+            "status": "unavailable",
+            "messages": ["RDKit is unavailable; mass and charge balance were not checked."],
+        }
+    reactants = _atom_counter(parts.reactants)
+    reagents = _atom_counter(parts.reagents)
+    products = _atom_counter(parts.products)
+    without_reagents = _counter_delta(reactants, products)
+    with_reagents = _counter_delta(reactants + reagents, products)
+
+    def magnitude(delta: dict[str, int]) -> int:
+        return sum(abs(value) for value in delta.values())
+
+    # Charge must use the same reagent convention as the atom count, or a
+    # catalytic proton written in the reagent slot reads as a lost charge.
+    reactant_charge = _charge_total(parts.reactants)
+    reagent_charge = _charge_total(parts.reagents)
+    product_charge = _charge_total(parts.products)
+    if not without_reagents and with_reagents:
+        include_reagents = False
+    elif not with_reagents and without_reagents:
+        include_reagents = True
+    else:
+        include_reagents = magnitude(with_reagents) < magnitude(without_reagents)
+    charge_left = reactant_charge + (reagent_charge if include_reagents else 0)
+    charge_delta = product_charge - charge_left
+    if charge_delta and not include_reagents and product_charge == reactant_charge + reagent_charge:
+        # Reagents are stoichiometric for charge even though atoms balance
+        # without them (e.g. a counterion carried through unchanged).
+        charge_left = reactant_charge + reagent_charge
+        charge_delta = 0
+
+    residual = with_reagents if include_reagents else without_reagents
+    atoms_balanced = not without_reagents or not with_reagents
+    messages: list[str] = []
+    if not atoms_balanced:
+        if set(residual) == {"H"}:
+            gained = residual["H"]
+            if gained > 0:
+                messages.append(
+                    f"Hydrogen count changes by {gained:+d} with no heavy-atom change: the written reaction implies a "
+                    "net reduction or protonation, so a hydride/proton source is missing."
+                )
+            else:
+                messages.append(
+                    f"Hydrogen count changes by {gained:+d} with no heavy-atom change: the written reaction implies a "
+                    "net oxidation or deprotonation, so an oxidant/base is missing."
+                )
+        else:
+            messages.append(
+                f"Atom balance does not close ({_delta_text(residual)}); reagents, leaving groups, solvent-derived "
+                "atoms, or stoichiometry are missing from the written reaction."
+            )
+    if charge_delta:
+        messages.append(
+            f"Formal charge is not conserved ({charge_left:+d} -> {product_charge:+d}); a counterion, proton, or "
+            "electron transfer is missing from the written reaction."
+        )
+    if atoms_balanced and not charge_delta:
+        status = "balanced"
+    else:
+        status = "unbalanced"
+    return {
+        "status": status,
+        "reactant_formula": _formula(reactants),
+        "reagent_formula": _formula(reagents),
+        "product_formula": _formula(products),
+        "element_delta_without_reagents": dict(without_reagents),
+        "element_delta_with_reagents": dict(with_reagents),
+        "hydrogen_delta": residual.get("H", 0) if not atoms_balanced else 0,
+        "reagents_counted_in_balance": include_reagents,
+        "reactant_charge": charge_left,
+        "product_charge": product_charge,
+        "charge_delta": charge_delta,
+        "messages": messages,
+    }
 
 
 def _functional_groups(smiles_values: list[str]) -> set[str]:
@@ -226,15 +358,8 @@ def analyze_reaction(reaction_smiles: str, mode: str = "sanity_check") -> Reacti
     atom_delta = atom_mapping_delta(parts)
     if atom_delta.get("status") == "unmapped":
         warnings.append(atom_delta["message"])
-    reactant_elements = _element_counter(parts.reactants)
-    product_elements = _element_counter(parts.products)
-    element_delta = {
-        key: product_elements.get(key, 0) - reactant_elements.get(key, 0)
-        for key in sorted(set(reactant_elements) | set(product_elements))
-        if product_elements.get(key, 0) != reactant_elements.get(key, 0)
-    }
-    if element_delta:
-        warnings.append("Reactant/product heavy-atom balance differs; reagents, leaving groups, or stoichiometry may be omitted.")
+    balance = mass_charge_balance(parts)
+    warnings.extend(balance.get("messages", []))
     classes = infer_reaction_classes(parts)
     conditions = []
     for cls in classes:
@@ -244,12 +369,14 @@ def analyze_reaction(reaction_smiles: str, mode: str = "sanity_check") -> Reacti
     analysis: dict[str, Any] = {
         "mode": mode,
         "reaction_classes": classes,
-        "element_delta_without_reagents": dict(element_delta),
+        "mass_charge_balance": balance,
+        "element_delta_without_reagents": balance.get("element_delta_without_reagents", {}),
         "tool_facts": {
             "parsed_reactant_count": len(parts.reactants),
             "parsed_reagent_count": len(parts.reagents),
             "parsed_product_count": len(parts.products),
             "rdkit_reaction_svg_available": bool(svg),
+            "mass_charge_balance_status": balance.get("status"),
         },
         "rule_inferences": {
             "plausibility_checks": [
@@ -276,6 +403,11 @@ def analyze_reaction(reaction_smiles: str, mode: str = "sanity_check") -> Reacti
         confidence = 0.45
     if warnings:
         confidence = min(confidence, 0.62)
+    if balance.get("status") == "unbalanced":
+        # A reaction that does not conserve atoms or charge is not merely
+        # under-annotated: as written it is wrong, so cap harder than for a
+        # missing atom map.
+        confidence = min(confidence, 0.3)
     return ReactionRecord(
         source="reaction_smiles",
         reaction_smiles=reaction_smiles,

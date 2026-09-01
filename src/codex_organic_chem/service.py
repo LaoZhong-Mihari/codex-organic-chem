@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .external import crest_record, doctor_report, tool_statuses, xtb_opt_record
+from .external import doctor_report, tool_statuses
 from .figure_tools import figure_tool_statuses
 from .input_review import prepare_input_review
 from .literature import literature_search
@@ -21,6 +21,12 @@ from .rdkit_tools import (
 from .reaction import analyze_reaction
 from .route_figure import render_route_figure, route_figure_spec_example
 from .scheme_ocsr import benchmark_ocsr, parse_scheme
+from .semiempirical import (
+    crest_conformer_record,
+    xtb_opt_record,
+    xtb_reactivity_record,
+    xtb_thermo_record,
+)
 from .synthesis import suggest_synthesis_path
 from .structure_review import review_session_result, start_structure_review_batch
 
@@ -43,6 +49,8 @@ def chem_input_review(
     molfile: str | None = None,
     image_path: str | None = None,
     kind: str = "auto",
+    interactive: bool = True,
+    timeout_s: int = 1800,
 ) -> dict[str, Any]:
     return prepare_input_review(
         smiles=smiles,
@@ -50,6 +58,8 @@ def chem_input_review(
         molfile=molfile,
         image_path=image_path,
         kind=kind,
+        interactive=interactive,
+        timeout_s=timeout_s,
     )
 
 
@@ -86,11 +96,6 @@ def chem_draw(
         smiles = None
     if output not in {"svg", "png", "molfile"}:
         return {"status": "error", "warnings": [f"Unsupported output format: {output}"]}
-    if output == "png":
-        return {
-            "status": "unavailable",
-            "warnings": ["PNG export is not implemented in MVP; request SVG or Molfile."],
-        }
     payload: str | None = None
     kind = "molecule"
     if reaction_smiles:
@@ -102,9 +107,20 @@ def chem_draw(
     elif smiles:
         record = normalize_structure(smiles=smiles, source="draw")
         warnings.extend(record.warnings)
-        payload = record.svg if output == "svg" else record.molblock
+        if output == "molfile":
+            payload = record.molblock
+        else:
+            # Draw single molecules through the shared fixed-geometry engine so
+            # standalone drawings match route/mechanism figures exactly.
+            payload = _standalone_molecule_svg(
+                record.isomeric_smiles or record.canonical_smiles or smiles, warnings
+            ) or record.svg
     else:
         return {"status": "error", "warnings": ["Provide smiles or reaction_smiles."]}
+
+    if output == "png":
+        return _draw_png(kind, payload, output_file, warnings)
+
     result = {
         "status": "ok" if payload else "error",
         "kind": kind,
@@ -120,11 +136,83 @@ def chem_draw(
     return result
 
 
+def _standalone_molecule_svg(smiles: str | None, warnings: list[str]) -> str | None:
+    if not smiles:
+        return None
+    try:
+        from .figure_style import render_molecule
+
+        depiction = render_molecule(smiles=smiles, preset="acs")
+    except Exception:
+        return None
+    warnings.extend(depiction.warnings)
+    return (
+        f"<svg xmlns='http://www.w3.org/2000/svg' width='{depiction.width}px' "
+        f"height='{depiction.height}px' viewBox='0 0 {depiction.width} {depiction.height}'>\n"
+        f"<rect width='100%' height='100%' fill='white'/>\n{depiction.svg_body}\n</svg>"
+    )
+
+
+def _draw_png(
+    kind: str, svg_payload: str | None, output_file: str | None, warnings: list[str]
+) -> dict[str, Any]:
+    """Rasterize the checked SVG master; PNG is always derived, never drawn."""
+    import tempfile
+
+    from .figure_audit import raster_ink_check, svg_to_png
+
+    if not svg_payload:
+        return {"status": "error", "kind": kind, "format": "png", "warnings": warnings}
+    if not output_file:
+        return {
+            "status": "error",
+            "kind": kind,
+            "format": "png",
+            "warnings": [*warnings, "PNG output requires output_file (binary data is not returned inline)."],
+        }
+    png_path = Path(output_file).expanduser().resolve()
+    png_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(suffix=".svg", mode="w", delete=False, encoding="utf-8") as handle:
+        handle.write(svg_payload)
+        svg_tmp = Path(handle.name)
+    try:
+        raster_warnings = svg_to_png(svg_tmp, png_path)
+    finally:
+        svg_tmp.unlink(missing_ok=True)
+    warnings.extend(raster_warnings)
+    if not png_path.exists() or raster_warnings:
+        return {"status": "unavailable", "kind": kind, "format": "png", "warnings": warnings}
+    ink_warnings, ink_summary = raster_ink_check(png_path)
+    warnings.extend(ink_warnings)
+    return {
+        "status": "ok",
+        "kind": kind,
+        "format": "png",
+        "svg_master": svg_payload,
+        "output_file": str(png_path),
+        "raster_check": ink_summary,
+        "warnings": warnings,
+    }
+
+
+COMPUTE_TASKS = (
+    "descriptors",
+    "conformers",
+    "charges",
+    "xtb_opt",
+    "xtb_reactivity",
+    "xtb_thermo",
+    "crest",
+)
+
+
 def chem_compute(
     smiles: str,
     tasks: list[str] | None = None,
     num_confs: int = 8,
     max_iters: int = 200,
+    solvent: str | None = None,
+    timeout_s: int | None = None,
 ) -> dict[str, Any]:
     selected = tasks or ["descriptors"]
     records: list[CalculationRecord] = []
@@ -136,9 +224,13 @@ def chem_compute(
         elif task == "charges":
             records.append(charges_record(smiles))
         elif task == "xtb_opt":
-            records.append(xtb_opt_record(smiles))
+            records.append(xtb_opt_record(smiles, solvent=solvent, timeout_s=timeout_s or 300))
+        elif task == "xtb_reactivity":
+            records.append(xtb_reactivity_record(smiles, solvent=solvent, timeout_s=timeout_s or 300))
+        elif task == "xtb_thermo":
+            records.append(xtb_thermo_record(smiles, solvent=solvent, timeout_s=timeout_s or 600))
         elif task == "crest":
-            records.append(crest_record(smiles))
+            records.append(crest_conformer_record(smiles, solvent=solvent, timeout_s=timeout_s or 600))
         else:
             records.append(
                 CalculationRecord(

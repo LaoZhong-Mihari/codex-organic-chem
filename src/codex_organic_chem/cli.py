@@ -6,6 +6,7 @@ import sys
 
 from .external import tool_statuses
 from .service import (
+    COMPUTE_TASKS,
     chem_compute,
     chem_draw,
     chem_figure_tool_status,
@@ -53,13 +54,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--gold-map", help="Optional JSON/TSV compound-to-placeholder definitions")
     p.add_argument("--out", choices=["json"], default="json", help="Output format")
 
-    p = sub.add_parser("input-review", help="Render recognized input and block downstream work until user confirmation")
+    p = sub.add_parser("input-review", help="Render recognized input and optionally wait for editor confirmation")
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument("--smiles")
     group.add_argument("--reaction-smiles")
     group.add_argument("--molfile")
     group.add_argument("--image-path")
     p.add_argument("--kind", choices=["auto", "molecule", "reaction"], default="auto")
+    p.add_argument("--wait", action="store_true", help="Keep the local review editor live and wait for completion")
+    p.add_argument("--timeout-s", type=int, default=1800, help="Review session timeout in seconds")
 
     p = sub.add_parser("review-batch", help="Start a local Ketcher batch review session for molecule SMILES")
     p.add_argument("--input", required=True, help="JSON file containing a list of review items or an object with an items list")
@@ -84,11 +87,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output", choices=["svg", "png", "molfile"], default="svg")
     p.add_argument("--output-file")
 
-    p = sub.add_parser("compute", help="Run lightweight calculations")
+    p = sub.add_parser("compute", help="Run RDKit descriptors or GFN2-xTB/CREST calculations")
     p.add_argument("--smiles", required=True)
-    p.add_argument("--task", action="append", choices=["descriptors", "conformers", "charges", "xtb_opt", "crest"])
+    p.add_argument("--task", action="append", choices=list(COMPUTE_TASKS))
     p.add_argument("--num-confs", type=int, default=8)
     p.add_argument("--max-iters", type=int, default=200)
+    p.add_argument("--solvent", help="Implicit solvent for xTB/CREST (ALPB name, e.g. water, thf, dmso)")
+    p.add_argument("--timeout", type=int, dest="timeout_s", help="Per-calculation timeout in seconds")
 
     p = sub.add_parser("reaction-analyze", help="Analyze reaction plausibility, conditions, or retrosynthesis hints")
     p.add_argument("--reaction", required=True)
@@ -152,7 +157,22 @@ def main(argv: list[str] | None = None) -> None:
             molfile=args.molfile,
             image_path=args.image_path,
             kind=args.kind,
+            interactive=args.wait,
+            timeout_s=args.timeout_s,
         )
+        if args.wait and payload.get("session_id"):
+            sys.stderr.write(f"Review URL: {payload['review_url']}\n")
+            sys.stderr.flush()
+            payload = chem_structure_review_result(
+                session_id=payload["session_id"],
+                review_token=payload.get("review_token"),
+                wait=True,
+                timeout_s=args.timeout_s,
+            )
+        elif not args.wait and payload.get("status") != "error":
+            payload.setdefault("warnings", []).append(
+                "Static preview only: use --wait to keep the local review editor live until confirmation."
+            )
     elif args.command == "review-batch":
         with open(args.input, encoding="utf-8") as handle:
             review_payload = json.load(handle)
@@ -188,7 +208,14 @@ def main(argv: list[str] | None = None) -> None:
             output_file=args.output_file,
         )
     elif args.command == "compute":
-        payload = chem_compute(args.smiles, tasks=args.task, num_confs=args.num_confs, max_iters=args.max_iters)
+        payload = chem_compute(
+            args.smiles,
+            tasks=args.task,
+            num_confs=args.num_confs,
+            max_iters=args.max_iters,
+            solvent=args.solvent,
+            timeout_s=args.timeout_s,
+        )
     elif args.command == "reaction-analyze":
         payload = chem_reaction_analyze(args.reaction, mode=args.mode)
     elif args.command == "mechanism-draft":

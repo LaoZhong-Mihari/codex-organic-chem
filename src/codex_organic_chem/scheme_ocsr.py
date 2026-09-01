@@ -59,7 +59,11 @@ def _has_low_confidence_label_artifact_atoms(smiles: str | None) -> bool:
     mol = _mol_from_smiles(smiles or "")
     if mol is None:
         return False
-    common_scheme_atoms = {0, 1, 6, 7, 8, 15, 16, 34}
+    # Elements routinely drawn in organic schemes; a low-confidence candidate
+    # containing anything else (B, Si, metals, ...) probably misread an atom
+    # label. Halogens must be here: aryl F/Cl/Br/I are everywhere in real
+    # schemes, and penalizing them punishes correct reads.
+    common_scheme_atoms = {0, 1, 5, 6, 7, 8, 9, 14, 15, 16, 17, 34, 35, 53}
     return any(atom.GetAtomicNum() not in common_scheme_atoms for atom in mol.GetAtoms())
 
 
@@ -182,6 +186,21 @@ def _candidate_score(record: dict[str, Any], *, max_heavy_atom_count: int | None
     warnings = record.get("warnings") or []
     score -= min(len(warnings), 6) * 0.08
     metadata = record.get("metadata", {}) if isinstance(record.get("metadata"), dict) else {}
+    # Consensus: independent engines agreeing on one structure is the strongest
+    # signal OCSR has, worth more than any single engine's own confidence.
+    # Agreement across preprocessing variants of the same image helps too, but
+    # more weakly - variants are correlated evidence, not independent reads.
+    try:
+        tool_agreement = int(metadata.get("tool_agreement", 1) or 1)
+    except (TypeError, ValueError):
+        tool_agreement = 1
+    try:
+        variant_agreement = int(metadata.get("variant_agreement", 1) or 1)
+    except (TypeError, ValueError):
+        variant_agreement = 1
+    if metrics["sanitize_ok"]:
+        score += min(tool_agreement - 1, 3) * 2.2
+        score += min(variant_agreement - 1, 4) * 0.7
     image_variant = metadata.get("image_variant")
     if image_variant and image_variant != "original":
         # Preprocessed variants often rescue faint skeletons, but can disturb

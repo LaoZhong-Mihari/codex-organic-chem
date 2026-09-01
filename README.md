@@ -7,7 +7,7 @@ It gives Codex deterministic tools for:
 - RDKit structure normalization, drawing, descriptors, conformers, and charges,
 - optional Open Babel, xTB, and CREST integration when binaries are installed,
 - rule-based reaction sanity checks, retrosynthesis hints, condition families, and mechanism drafts,
-- a Codex Skill and MCP server exposing the same workflow.
+- synchronized Codex and Claude Code skills plus an MCP server exposing the same workflow.
 
 This is a research assistant, not an experimental safety authority. Treat all
 synthetic, mechanistic, and computational suggestions as hypotheses requiring
@@ -17,6 +17,8 @@ literature review and expert validation.
 
 - `.agents/skills/organic-chemistry-assistant`: the Codex skill instructions and
   UI metadata.
+- `.claude/skills/organic-chemistry-assistant`: the same skill for Claude Code
+  (kept in sync with the `.agents` copy).
 - `src/codex_organic_chem`: the local Python CLI/MCP implementation used by the
   skill.
 - `integrations/ketcher`: optional Ketcher review UI source; build artifacts are
@@ -26,6 +28,7 @@ literature review and expert validation.
 See [DEPENDENCIES.md](DEPENDENCIES.md) for the complete dependency map,
 including Python, MCP, optional chemistry binaries, editor integrations, npm
 packages, environment variables, and third-party licensing notes.
+See [CHANGELOG.md](CHANGELOG.md) for the current unreleased improvements.
 
 ## Quick Start
 
@@ -41,18 +44,23 @@ uv run codex-chem reaction-analyze --reaction "CBr.[OH-]>>CO.[Br-]" --mode sanit
 uv run codex-chem mechanism-draft --reaction "CBr.[OH-]>>CO.[Br-]"
 ```
 
-## Codex Skill Setup
+## Skill Setup (Codex and Claude Code)
 
-The skill folder is packaged with the project:
+Two synchronized copies of the skill ship with the project:
 
 ```text
-.agents/skills/organic-chemistry-assistant/
+.agents/skills/organic-chemistry-assistant/   # Codex
 ├── SKILL.md
 └── agents/openai.yaml
+.claude/skills/organic-chemistry-assistant/   # Claude Code
+└── SKILL.md
 ```
 
-For another Codex environment, copy or symlink that folder into the target
-skills directory and keep this repository available so `.mcp.json` can launch:
+Claude Code discovers the `.claude/skills` copy automatically when this
+repository is the working directory, and `.mcp.json` exposes the
+`codex-organic-chem` MCP server to it. For any other environment, copy or
+symlink the relevant folder into the target skills directory and keep this
+repository available so the MCP server can launch:
 
 ```bash
 uv run codex-chem-mcp
@@ -92,12 +100,23 @@ ambiguous text, the assistant must render the parsed candidate and wait for
 explicit user confirmation before continuing.
 
 ```bash
-codex-chem input-review --image-path scheme.png --kind reaction
-codex-chem input-review --smiles "CC(=O)Oc1ccccc1C(=O)O"
+codex-chem input-review --image-path scheme.png --kind reaction --wait
+codex-chem input-review --smiles "CC(=O)Oc1ccccc1C(=O)O" --wait
 ```
 
-For multiple molecule SMILES that need human correction, start a local Ketcher
-review queue instead of copying rendered SVGs by hand:
+For CLI review, `--wait` keeps the localhost editor alive and blocks until the
+user confirms/corrects the input or the session reaches `--timeout-s` (default:
+1800 seconds). Without `--wait`, `input-review` intentionally returns a static
+preview only, with no editor URL that would die when the command exits. The
+long-running MCP server can return a live session immediately and collect it
+later with `chem_structure_review_result`.
+
+For multiple molecule SMILES that need human correction, start a local review
+queue instead of copying rendered SVGs by hand. The review page opens in the
+default browser automatically (disable with `CODEX_CHEM_REVIEW_OPEN_BROWSER=0`)
+and works with zero build steps: when no Ketcher build is present, a built-in
+editor with server-side RDKit previews is served instead. Building Ketcher
+(below) upgrades the same URL to the full drawing UI.
 
 ```bash
 cat > reviews.json <<'JSON'
@@ -261,9 +280,10 @@ npm run preview -- --port 4173
 `codex-chem figure-tools` auto-detects `integrations/ketcher/dist` after a
 local build. The repository commits `package.json` and `package-lock.json`, but
 ignores `node_modules/` and `dist/`.
-`chem_structure_review_batch` can serve that built `dist` directly from its
-local review server, or it can target a running Vite/Ketcher URL when
-`CODEX_CHEM_KETCHER_URL` is set.
+`chem_structure_review_batch` serves that built `dist` directly from its local
+review server when present, targets a running Vite/Ketcher URL when
+`CODEX_CHEM_KETCHER_URL` is set, and otherwise falls back to the built-in
+review editor so human confirmation never requires a build step.
 
 ChemDoodle Web Components are detected from `integrations/chemdoodle` or
 `CODEX_CHEM_CHEMDOODLE_WEB_DIR`; the renderer writes
@@ -307,8 +327,15 @@ scripts/install_external_tools_macos.sh
 
 - RDKit: core parser/drawer/computation, installed by `uv sync`.
 - Open Babel: install with `brew install open-babel`; executable is `obabel`.
-- xTB: install with `brew tap grimme-lab/qc && brew install xtb`, or use the conda-forge fallback at `~/.local/share/codex-organic-chem/conda-tools`; used by `chem_compute task=xtb_opt`.
-- CREST: install with `brew install crest` from the Grimme tap, or use the conda-forge fallback created at `~/.local/share/codex-organic-chem/conda-tools`.
+- xTB: install with `brew tap grimme-lab/qc && brew install xtb`, or use the
+  conda-forge fallback at `~/.local/share/codex-organic-chem/conda-tools`; used
+  by `chem_compute` tasks `xtb_opt`, `xtb_reactivity`, and `xtb_thermo` for
+  optimized geometry/energy, atom-mapped charges and Fukui indices, and
+  frequencies/free-energy corrections.
+- CREST: install with `brew install crest` from the Grimme tap, or use the
+  conda-forge fallback created at
+  `~/.local/share/codex-organic-chem/conda-tools`; `chem_compute task=crest`
+  runs the conformer search and returns ensemble energies and populations.
 - For `xtb`/`crest`, the software prefers `CODEX_CHEM_*_PATH`, then the local conda-forge tool env, then PATH. This avoids broken Homebrew builds when the fallback exists.
 - OSRA: optional OCSR fallback. On Apple Silicon macOS, the tool auto-detects the Rosetta/x86_64 conda install at `~/.local/share/codex-organic-chem/ocsr-tools/osra-osx64/bin/osra`; set `CODEX_CHEM_OSRA_PATH` only to override it.
 - ChemSchematicResolver: optional legacy schematic/label resolver. It is installed locally but kept off the default crop OCSR path because the Q8 benchmark produced no structure candidates; set `CODEX_CHEM_CSR_CMD` or `CODEX_CHEM_ENABLE_CSR_DEFAULT=1` only when label-heavy schemes need it.

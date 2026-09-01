@@ -132,7 +132,44 @@ def _tools_payload(kind: str) -> dict[str, Any]:
     return tools
 
 
+def _canonical_agreement_key(candidate: dict[str, Any]) -> str:
+    """Canonical SMILES when parseable, else the raw text.
+
+    Agreement counting must be on canonical structure: two engines emitting
+    'OCC' and 'CCO' agree chemically even though the strings differ.
+    """
+    value = str(candidate.get("reaction_smiles") or candidate.get("smiles") or candidate.get("molfile") or "")
+    if not value or candidate.get("reaction_smiles") or candidate.get("molfile"):
+        return value
+    try:
+        from rdkit import Chem
+
+        mol = Chem.MolFromSmiles(value)
+        if mol is not None:
+            return Chem.MolToSmiles(mol, canonical=True)
+    except Exception:
+        pass
+    return value
+
+
 def _dedupe_candidates(raw_candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse duplicates while keeping the agreement signal they carry.
+
+    The same structure read from several preprocessing variants, or by several
+    independent engines, is the strongest accuracy evidence OCSR has. Instead of
+    discarding that multiplicity, each surviving candidate records
+    ``variant_agreement`` (how many image variants produced it) and
+    ``tool_agreement`` (how many distinct engines produced it) for the ranker.
+    """
+    variant_votes: dict[str, set[str]] = {}
+    tool_votes: dict[str, set[str]] = {}
+    for candidate in raw_candidates:
+        structure_key = _canonical_agreement_key(candidate)
+        if not structure_key:
+            continue
+        variant_votes.setdefault(structure_key, set()).add(str(candidate.get("image_variant") or "original"))
+        tool_votes.setdefault(structure_key, set()).add(str(candidate.get("tool") or "unknown"))
+
     seen: set[tuple[str, str, str]] = set()
     deduped: list[dict[str, Any]] = []
     for candidate in raw_candidates:
@@ -140,6 +177,9 @@ def _dedupe_candidates(raw_candidates: list[dict[str, Any]]) -> list[dict[str, A
         value = str(candidate.get("reaction_smiles") or candidate.get("smiles") or candidate.get("molfile") or "")
         key = (tool, value, str(candidate.get("adapter_env") or ""))
         if value and key not in seen:
+            structure_key = _canonical_agreement_key(candidate)
+            candidate["variant_agreement"] = len(variant_votes.get(structure_key, set()) or {1})
+            candidate["tool_agreement"] = len(tool_votes.get(structure_key, set()) or {1})
             deduped.append(candidate)
             seen.add(key)
     return deduped
@@ -154,14 +194,47 @@ def _coerce_confidence(value: Any) -> float | None:
         return None
 
 
+def _annotate_top_candidate_consensus(candidates: list[dict[str, Any]], warnings: list[str]) -> None:
+    """Summarize how well-supported the winning candidate is.
+
+    ``consensus`` on the top candidate tells the caller whether the pick is
+    corroborated (multiple engines and/or variants agree) or a single
+    uncorroborated read that deserves extra scrutiny before confirmation.
+    """
+    if not candidates:
+        return
+    top = candidates[0]
+    metadata = top.get("metadata") if isinstance(top.get("metadata"), dict) else {}
+    tool_agreement = int(metadata.get("tool_agreement", 1) or 1)
+    variant_agreement = int(metadata.get("variant_agreement", 1) or 1)
+    if tool_agreement > 1:
+        level = "multi_engine"
+    elif variant_agreement > 1:
+        level = "multi_variant_single_engine"
+    else:
+        level = "single_read"
+    metadata["consensus"] = level
+    if level == "single_read" and len(candidates) > 1:
+        warnings.append(
+            "The top OCSR candidate is a single uncorroborated read; compare the rendered "
+            "candidate against the source image carefully before confirming."
+        )
+
+
 def parse_image(path: str, kind: str = "auto") -> dict:
     image_path = Path(path).expanduser().resolve()
     warnings: list[str] = []
     if not image_path.exists():
+        # Keep the same shape as the normal return so callers never see a
+        # payload with missing keys on this branch.
         return {
+            "status": "no_candidates",
             "kind": kind,
             "path": str(image_path),
             "candidates": [],
+            "confirmation_required": False,
+            "next_action": "Provide an existing image path.",
+            "ranked_candidates": [],
             "tools": {},
             "warnings": [f"Image path does not exist: {image_path}"],
         }
@@ -201,6 +274,8 @@ def parse_image(path: str, kind: str = "auto") -> dict:
                         "adapter_env": candidate.get("adapter_env"),
                         "adapter_confidence": adapter_confidence,
                         "image_variant": candidate.get("image_variant"),
+                        "variant_agreement": candidate.get("variant_agreement", 1),
+                        "tool_agreement": candidate.get("tool_agreement", 1),
                     },
                     "warnings": [
                         "Reaction OCSR output is not fully validated; verify atom mapping, reagents, and stoichiometry manually.",
@@ -220,16 +295,24 @@ def parse_image(path: str, kind: str = "auto") -> dict:
         metadata["adapter_confidence"] = adapter_confidence
         metadata["image_variant"] = candidate.get("image_variant")
         metadata["raw_smiles"] = value_text
+        metadata["variant_agreement"] = candidate.get("variant_agreement", 1)
+        metadata["tool_agreement"] = candidate.get("tool_agreement", 1)
         for key in ("atoms", "bonds", "bboxes", "boxes", "labels"):
             if key in candidate:
                 metadata[key] = candidate[key]
         if adapter_confidence is not None:
-            record["confidence"] = min(float(record.get("confidence", adapter_confidence)), adapter_confidence)
+            # Blend rather than min(): the record confidence is an RDKit
+            # warning-count heuristic, the adapter confidence is real model
+            # evidence. min() meant a certain model could never raise a noisy
+            # heuristic, only be dragged down by it.
+            heuristic = float(record.get("confidence") or 0.0)
+            record["confidence"] = round(0.45 * heuristic + 0.55 * adapter_confidence, 4)
         if candidate_warnings:
             record.setdefault("warnings", [])
             record["warnings"].extend(candidate_warnings)
         candidates.append(record)
     candidates = rank_candidates(candidates)
+    _annotate_top_candidate_consensus(candidates, warnings)
     if not candidates:
         warnings.append(
             "No structure candidates were produced. For complex scans or hand drawings, use Ketcher/ChemDraw-style manual correction."
@@ -246,7 +329,7 @@ def parse_image(path: str, kind: str = "auto") -> dict:
             if candidates
             else "Provide a clearer image or corrected SMILES/Molfile."
         ),
-        "ranked_candidates": candidates,
+        "ranked_candidates": list(candidates),
         "tools": _tools_payload(kind),
         "warnings": warnings,
     }

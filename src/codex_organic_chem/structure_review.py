@@ -6,6 +6,7 @@ import os
 import secrets
 import threading
 import time
+import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -286,12 +287,34 @@ def _session_payload(session: ReviewSession, include_token: bool = False) -> dic
     }
     dist_path = _ketcher_dist_path()
     if not os.environ.get("CODEX_CHEM_KETCHER_URL") and not (dist_path / "index.html").exists():
+        payload["editor"] = "builtin_fallback"
         payload["warnings"].append(
-            "Ketcher dist is not built. Run `cd integrations/ketcher && npm run build` or set CODEX_CHEM_KETCHER_URL."
+            "Serving the built-in review editor (no build step required). For the full Ketcher "
+            "drawing UI, run `cd integrations/ketcher && npm run build` or set CODEX_CHEM_KETCHER_URL."
         )
+    else:
+        payload["editor"] = "ketcher"
     if include_token:
         payload["review_token"] = session.token
     return payload
+
+
+def _should_open_browser() -> bool:
+    """Auto-open is on by default, but never during tests or when disabled."""
+    if os.environ.get("CODEX_CHEM_REVIEW_OPEN_BROWSER", "").lower() in {"0", "false", "no"}:
+        return False
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return False
+    return True
+
+
+def _open_review_in_browser(review_url: str) -> bool:
+    if not _should_open_browser():
+        return False
+    try:
+        return bool(webbrowser.open(review_url, new=1))
+    except Exception:
+        return False
 
 
 def create_review_session(items: list[dict[str, Any]], timeout_s: int | float = DEFAULT_REVIEW_TIMEOUT_S) -> dict[str, Any]:
@@ -429,8 +452,18 @@ def start_structure_review_batch(
     timeout_s: int | float = DEFAULT_REVIEW_TIMEOUT_S,
 ) -> dict[str, Any]:
     session = create_review_session(items, timeout_s=timeout_s)
+    session["browser_opened"] = _open_review_in_browser(session["review_url"])
+    if not session["browser_opened"]:
+        session["warnings"] = [
+            *session.get("warnings", []),
+            f"Open the review page manually: {session['review_url']}",
+        ]
     if wait:
-        return wait_for_review_session(session["session_id"], token=session["review_token"], timeout_s=timeout_s)
+        result = wait_for_review_session(
+            session["session_id"], token=session["review_token"], timeout_s=timeout_s
+        )
+        result["browser_opened"] = session["browser_opened"]
+        return result
     return session
 
 
@@ -447,6 +480,127 @@ def ensure_review_server() -> str:
         _SERVER_THREAD = threading.Thread(target=_SERVER.serve_forever, name="codex-chem-review-server", daemon=True)
         _SERVER_THREAD.start()
         return _SERVER_BASE_URL
+
+
+# Dependency-free review UI served when the Ketcher build is absent. Structures
+# are rendered server-side by RDKit (the /api/preview endpoint), so the page
+# needs no JavaScript chemistry libraries: the user sees each depiction, edits
+# the SMILES if needed with a live re-render, and confirms/skips each item.
+_BUILTIN_REVIEW_PAGE = """<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Structure Review</title>
+<style>
+ body{font:15px/1.45 Arial,Helvetica,sans-serif;margin:0;background:#f5f6f7;color:#111}
+ header{background:#fff;border-bottom:1px solid #ddd;padding:14px 22px}
+ h1{font-size:19px;margin:0}
+ .sub{color:#666;font-size:13px;margin-top:3px}
+ main{max-width:880px;margin:18px auto;padding:0 16px}
+ .card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:14px;display:flex;gap:18px}
+ .card.done{opacity:.62}
+ .depiction{flex:0 0 240px;min-height:170px;display:flex;align-items:center;justify-content:center;border:1px solid #eee;border-radius:6px;background:#fff}
+ .depiction svg{max-width:100%;max-height:220px;height:auto}
+ .fields{flex:1;min-width:0}
+ .label{font-weight:700;margin-bottom:2px}
+ .warn{color:#9a3412;font-size:12.5px;margin:6px 0;white-space:pre-wrap}
+ textarea{width:100%;box-sizing:border-box;font:13px Menlo,monospace;padding:7px;border:1px solid #ccc;border-radius:5px;min-height:44px}
+ .row{margin-top:9px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+ button{font:600 13.5px Arial;padding:7px 14px;border-radius:6px;border:1px solid #bbb;background:#fff;cursor:pointer}
+ button.primary{background:#0b57d0;border-color:#0b57d0;color:#fff}
+ button:disabled{opacity:.45;cursor:default}
+ .status{font-size:13px;font-weight:700}
+ .status.confirmed{color:#0a7d33}.status.modified{color:#0b57d0}.status.skipped{color:#888}.status.invalid{color:#b00020}
+ #banner{margin:14px 0;padding:11px 14px;border-radius:6px;background:#e7f0fe;border:1px solid #b9d2f8;display:none}
+</style>
+</head>
+<body>
+<header>
+ <h1>Structure review</h1>
+ <div class="sub">Check each rendered structure against the source. Edit the SMILES to correct it (preview updates), then confirm.</div>
+</header>
+<main><div id="banner"></div><div id="items"></div></main>
+<script>
+const params = new URLSearchParams(location.search);
+const sessionId = params.get('session'), token = params.get('token');
+const api = (params.get('api') || location.origin).replace(/\\/$/, '');
+const hdrs = {'Content-Type':'application/json','X-Review-Token':token};
+let sessionData = null;
+
+async function fetchSession(){
+  const r = await fetch(`${api}/api/review-sessions/${sessionId}?token=${encodeURIComponent(token)}`);
+  if(!r.ok){banner(`Could not load review session (HTTP ${r.status}).`);throw new Error('load');}
+  sessionData = await r.json();
+}
+function banner(text){const b=document.getElementById('banner');b.textContent=text;b.style.display='block';}
+async function preview(smiles){
+  const r = await fetch(`${api}/api/preview`,{method:'POST',headers:hdrs,body:JSON.stringify({smiles})});
+  return r.json();
+}
+async function submit(itemId, body){
+  const r = await fetch(`${api}/api/review-sessions/${sessionId}/items/${encodeURIComponent(itemId)}?token=${encodeURIComponent(token)}`,
+    {method:'POST',headers:hdrs,body:JSON.stringify(body)});
+  return r.json();
+}
+function render(){
+  const host=document.getElementById('items');host.innerHTML='';
+  for(const item of sessionData.items){
+    const done = item.status && item.status !== 'pending';
+    const card=document.createElement('div');card.className='card'+(done?' done':'');
+    card.innerHTML=`
+      <div class="depiction" id="dep-${item.id}">(rendering...)</div>
+      <div class="fields">
+        <div class="label">${item.label || item.id}</div>
+        <div class="status ${item.status||'pending'}" id="st-${item.id}">${done?item.status:'awaiting review'}</div>
+        <div class="warn" id="warn-${item.id}">${(item.warnings||[]).join('\\n')}</div>
+        <textarea id="smi-${item.id}" ${done?'disabled':''}>${item.smiles || item.input_smiles || ''}</textarea>
+        <div class="row">
+          <button class="primary" id="ok-${item.id}" ${done?'disabled':''}>Confirm</button>
+          <button id="re-${item.id}" ${done?'disabled':''}>Re-render preview</button>
+          <button id="skip-${item.id}" ${done?'disabled':''}>Skip</button>
+        </div>
+      </div>`;
+    host.appendChild(card);
+    refreshPreview(item.id, item.smiles || item.input_smiles || '');
+    if(!done){
+      document.getElementById(`re-${item.id}`).onclick=()=>refreshPreview(item.id, val(item.id));
+      document.getElementById(`ok-${item.id}`).onclick=()=>finish(item, 'confirmed');
+      document.getElementById(`skip-${item.id}`).onclick=()=>finish(item, 'skipped');
+      document.getElementById(`smi-${item.id}`).addEventListener('change',()=>refreshPreview(item.id, val(item.id)));
+    }
+  }
+}
+const val = id => document.getElementById(`smi-${id}`).value.trim();
+async function refreshPreview(id, smiles){
+  const dep=document.getElementById(`dep-${id}`);
+  if(!smiles){dep.textContent='(empty SMILES)';return;}
+  try{
+    const p=await preview(smiles);
+    if(p.svg){dep.innerHTML=p.svg;}
+    else{dep.textContent='(invalid SMILES)';}
+    const st=document.getElementById(`st-${id}`);
+    if(st && !st.classList.contains('confirmed') && !st.classList.contains('skipped')){
+      st.textContent = p.status==='ok' ? 'awaiting review' : 'invalid SMILES';
+      st.className = 'status ' + (p.status==='ok' ? 'pending' : 'invalid');
+    }
+  }catch(e){dep.textContent='(preview failed)';}
+}
+async function finish(item, mode){
+  const smiles = val(item.id);
+  const body = mode==='skipped' ? {status:'skipped'} :
+    {status: smiles===(item.input_smiles||'') ? 'confirmed' : 'modified', reviewed_smiles: smiles};
+  const result = await submit(item.id, body);
+  sessionData = result;
+  render();
+  if(result.status && result.status !== 'pending'){
+    banner(`Review ${result.status}. You can close this tab; results are already available to the assistant.`);
+  }
+}
+fetchSession().then(render).catch(()=>{});
+</script>
+</body>
+</html>
+"""
 
 
 class ReviewRequestHandler(BaseHTTPRequestHandler):
@@ -479,6 +633,19 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         parts = [unquote(part) for part in parsed.path.strip("/").split("/") if part]
         try:
+            if parts == ["api", "preview"]:
+                payload = _read_json_body(self)
+                record = normalize_structure(smiles=str(payload.get("smiles") or ""), source="review_preview")
+                record_dict = record.to_dict()
+                self._write_json(
+                    {
+                        "status": "ok" if record_dict.get("canonical_smiles") else "invalid",
+                        "svg": record_dict.get("svg"),
+                        "canonical_smiles": record_dict.get("canonical_smiles"),
+                        "warnings": record_dict.get("warnings", []),
+                    }
+                )
+                return
             if len(parts) == 5 and parts[:2] == ["api", "review-sessions"] and parts[3] == "items":
                 payload = _read_json_body(self)
                 self._write_json(submit_review_item(parts[2], parts[4], payload, token=self._token(parsed.query)))
@@ -537,13 +704,9 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self._safe_write(data)
             return
-        self._write_html(
-            "<!doctype html><html><head><meta charset='utf-8'><title>Codex Chem Review</title></head>"
-            "<body><h1>Ketcher review UI is not built</h1>"
-            "<p>Run <code>cd integrations/ketcher && npm run build</code>, or set "
-            "<code>CODEX_CHEM_KETCHER_URL</code> to a running Ketcher integration.</p></body></html>",
-            status=503,
-        )
+        # No Ketcher build available: serve the dependency-free built-in
+        # editor so human review still works out of the box.
+        self._write_html(_BUILTIN_REVIEW_PAGE)
 
     def _write_json(self, payload: dict[str, Any], status: int = 200) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")

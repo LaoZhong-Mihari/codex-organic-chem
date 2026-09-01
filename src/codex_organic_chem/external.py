@@ -1,21 +1,11 @@
 from __future__ import annotations
 
 import os
-import tempfile
-from pathlib import Path
 
 from .figure_tools import ACS_PUBLICATION_STANDARD, FIGURE_TOOL_GUIDE, figure_tool_statuses
-from .models import CalculationRecord
 from .ocsr_adapters import OCSR_ADAPTERS, default_adapter_command
-from .rdkit_tools import RDKIT_AVAILABLE, parse_molecule, rdkit_version
-from .utils import bundled_tool_prefix, executable_status, run_command
-
-if RDKIT_AVAILABLE:  # pragma: no cover - covered through higher-level tests
-    from rdkit import Chem
-    from rdkit.Chem import AllChem
-else:  # pragma: no cover
-    Chem = None
-    AllChem = None
+from .rdkit_tools import RDKIT_AVAILABLE, rdkit_version
+from .utils import bundled_tool_prefix, executable_status
 
 
 INSTALL_GUIDE = {
@@ -33,8 +23,12 @@ INSTALL_GUIDE = {
         "notes": "Homebrew formula is open-babel; executable is obabel.",
     },
     "xtb": {
-        "purpose": "Semiempirical GFN2-xTB optimization and energy estimates.",
-        "required_for": ["chem_compute task=xtb_opt"],
+        "purpose": "Semiempirical GFN2-xTB geometries, per-atom reactivity, and thermochemistry.",
+        "required_for": [
+            "chem_compute task=xtb_opt",
+            "chem_compute task=xtb_reactivity (Fukui indices, partial charges, IP/EA)",
+            "chem_compute task=xtb_thermo (free energy, imaginary-mode count)",
+        ],
         "binary": "xtb",
         "macos": ["brew tap grimme-lab/qc", "brew install xtb"],
         "fallback": [
@@ -44,7 +38,7 @@ INSTALL_GUIDE = {
     },
     "crest": {
         "purpose": "CREST conformer/rotamer ensemble searches built around xTB.",
-        "required_for": ["chem_compute task=crest"],
+        "required_for": ["chem_compute task=crest (ensemble + Boltzmann populations)"],
         "binary": "crest",
         "macos": ["brew tap grimme-lab/qc", "brew install crest"],
         "fallback": [
@@ -210,7 +204,7 @@ def doctor_report() -> dict:
         "macos_one_shot": "scripts/install_external_tools_macos.sh",
         "notes": [
             "RDKit is required for the core assistant and is installed with uv.",
-            "Open Babel, xTB, and CREST add conversion and computation capability.",
+            "xTB and CREST add per-atom reactivity (Fukui indices), thermochemistry, and conformer ensembles; Open Babel adds format conversion.",
             "OSRA and the configured MolScribe/DECIMER/MolGrapher/OpenChemIE/ChemSchematicResolver/RxnScribe commands are optional OCSR adapters.",
             "Publication mechanism figures require explicit intermediates, atom-map anchored arrows, mechanism-relevant lone pairs, charges, and partial charges; use codex-chem mechanism-render before final ChemDraw/Illustrator/Inkscape polish.",
             "Unavailable tools are reported explicitly; the assistant should not invent results.",
@@ -218,128 +212,5 @@ def doctor_report() -> dict:
     }
 
 
-def _smiles_to_xyz(smiles: str, path: Path) -> list[str]:
-    parsed = parse_molecule(smiles=smiles)
-    if parsed.mol is None:
-        return parsed.warnings
-    mol = Chem.AddHs(parsed.mol)
-    params = AllChem.ETKDGv3()
-    params.randomSeed = 48879
-    conf_id = AllChem.EmbedMolecule(mol, params)
-    if conf_id < 0:
-        return ["RDKit failed to generate a 3D conformer for xTB input."]
-    try:
-        AllChem.MMFFOptimizeMolecule(mol, confId=conf_id)
-    except Exception:
-        try:
-            AllChem.UFFOptimizeMolecule(mol, confId=conf_id)
-        except Exception:
-            pass
-    xyz = Chem.MolToXYZBlock(mol, confId=conf_id)
-    path.write_text(xyz, encoding="utf-8")
-    return parsed.warnings
-
-
-def xtb_opt_record(smiles: str, timeout_s: int = 180) -> CalculationRecord:
-    status = executable_status("xtb", ("--version",))
-    params = {"smiles": smiles, "task": "opt", "method": "GFN2-xTB"}
-    if status.status != "available":
-        return CalculationRecord(
-            method="xtb_opt",
-            tool_version=None,
-            parameters=params,
-            status="unavailable",
-            warnings=["xTB binary is not installed or not on PATH."],
-        )
-    if not RDKIT_AVAILABLE:
-        return CalculationRecord(
-            method="xtb_opt",
-            tool_version=status.version,
-            parameters=params,
-            status="unavailable",
-            warnings=["RDKit is required to build xTB input coordinates."],
-        )
-    with tempfile.TemporaryDirectory(prefix="codex-chem-xtb-") as tmp:
-        tmp_path = Path(tmp)
-        xyz_path = tmp_path / "input.xyz"
-        warnings = _smiles_to_xyz(smiles, xyz_path)
-        if not xyz_path.exists():
-            return CalculationRecord(
-                method="xtb_opt",
-                tool_version=status.version,
-                parameters=params,
-                input_files=[str(xyz_path)],
-                status="error",
-                warnings=warnings,
-            )
-        try:
-            code, stdout, stderr = run_command(
-                ["xtb", str(xyz_path), "--opt", "--gfn", "2"],
-                timeout_s=timeout_s,
-                cwd=str(tmp_path),
-            )
-        except Exception as exc:  # pragma: no cover - external only
-            return CalculationRecord(
-                method="xtb_opt",
-                tool_version=status.version,
-                parameters=params,
-                input_files=[str(xyz_path)],
-                status="error",
-                warnings=warnings + [f"xTB execution failed: {exc}"],
-            )
-        out_xyz = tmp_path / "xtbopt.xyz"
-        energy = None
-        for line in stdout.splitlines():
-            if "TOTAL ENERGY" in line.upper():
-                parts = line.split()
-                for part in reversed(parts):
-                    try:
-                        energy = float(part)
-                        break
-                    except ValueError:
-                        continue
-        results = {
-            "exit_code": code,
-            "total_energy_hartree": energy,
-            "stdout_tail": stdout.splitlines()[-20:],
-            "stderr_tail": stderr.splitlines()[-20:],
-        }
-        if out_xyz.exists():
-            results["optimized_xyz"] = out_xyz.read_text(encoding="utf-8", errors="replace")
-        return CalculationRecord(
-            method="xtb_opt",
-            tool_version=status.version,
-            parameters=params,
-            input_files=[str(xyz_path)],
-            output_files=[str(out_xyz)] if out_xyz.exists() else [],
-            results=results,
-            status="ok" if code == 0 else "error",
-            warnings=warnings,
-        )
-
-
-def crest_record(smiles: str) -> CalculationRecord:
-    status = executable_status("crest", ("--version",))
-    if status.status != "available":
-        return CalculationRecord(
-            method="crest_conformer_search",
-            tool_version=None,
-            parameters={"smiles": smiles},
-            status="unavailable",
-            warnings=["CREST binary is not installed or not on PATH."],
-        )
-    return CalculationRecord(
-        method="crest_conformer_search",
-        tool_version=status.version,
-        parameters={"smiles": smiles},
-        results={
-            "binary_available": True,
-            "execution_policy": "manual_or_future_explicit_run",
-            "suggested_manual_command": "crest input.xyz --gfn2",
-        },
-        status="available",
-        warnings=[
-            "CREST is installed, but automated CREST execution is disabled in MVP to avoid long-running jobs. "
-            "Use RDKit conformers for quick estimates or run CREST manually with an explicit job policy."
-        ],
-    )
+# xTB and CREST execution lives in semiempirical.py; this module reports what is
+# installed and how to install it.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -228,7 +229,14 @@ def _transform(
     coords: dict[int, tuple[float, float]],
     box: tuple[float, float, float, float],
     max_bond_px: float = 48,
-) -> dict[int, tuple[float, float]]:
+) -> tuple[dict[int, tuple[float, float]], float]:
+    """Fit mol-space coords into ``box``; also report the px-per-unit scale used.
+
+    The scale is what the uniform-scale pre-pass in
+    :func:`render_mechanism_canvas` needs: the minimum scale across all panels
+    becomes every panel's cap, which is what keeps one bond length across the
+    whole mechanism figure.
+    """
     x, y, width, height = box
     xs = [pt[0] for pt in coords.values()]
     ys = [pt[1] for pt in coords.values()]
@@ -239,10 +247,11 @@ def _transform(
     scale = min((width - 32) / mol_w, (height - 42) / mol_h, max_bond_px)
     center_x = (min_x + max_x) / 2
     center_y = (min_y + max_y) / 2
-    return {
+    positions = {
         idx: (x + width / 2 + (px - center_x) * scale, y + height / 2 - (py - center_y) * scale)
         for idx, (px, py) in coords.items()
     }
+    return positions, scale
 
 
 def _apply_alignment(
@@ -1319,7 +1328,7 @@ def _layout_panel_molecules(
         raw_coords = _coords_for(mol)
         mol_box = molecule_box(index)
         map_to_idx = _map_index(mol)
-        positions = _transform(raw_coords, mol_box, max_bond_px=float(style["max_bond_px"]))
+        positions, px_scale = _transform(raw_coords, mol_box, max_bond_px=float(style["max_bond_px"]))
         if mol_spec.get("flip_x"):
             center_x = mol_box[0] + mol_box[2] / 2
             positions = {atom_idx: (2 * center_x - px, py) for atom_idx, (px, py) in positions.items()}
@@ -1355,6 +1364,7 @@ def _layout_panel_molecules(
                 "spec": mol_spec,
                 "mol_box": mol_box,
                 "mol_index": index,
+                "px_scale": px_scale,
             }
         )
     return mol_entries
@@ -2857,6 +2867,64 @@ def build_marvin_adapter_payload(spec: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _audit_elements_for_panel(mol_entries: list[dict[str, Any]], panel_index: int) -> list[Any]:
+    """Build audit elements from the geometry the panel layout already computed."""
+    from .figure_audit import FigureElement
+
+    elements: list[FigureElement] = []
+    for entry in mol_entries:
+        positions = entry.get("positions") or {}
+        if not positions:
+            continue
+        xs = [pt[0] for pt in positions.values()]
+        ys = [pt[1] for pt in positions.values()]
+        mol = entry["mol"]
+        bond_lengths: list[float] = []
+        for bond in mol.GetBonds():
+            begin = positions.get(bond.GetBeginAtomIdx())
+            end = positions.get(bond.GetEndAtomIdx())
+            if begin and end:
+                bond_lengths.append(math.hypot(end[0] - begin[0], end[1] - begin[1]))
+        label = str(
+            entry["spec"].get("label")
+            or entry["spec"].get("smiles")
+            or entry["spec"].get("id")
+            or f"molecule {entry['mol_index'] + 1}"
+        )
+        elements.append(
+            FigureElement(
+                kind="molecule",
+                label=f"panel {panel_index}: {label}",
+                # Pad atom centres out to approximate ink: bonds and labels
+                # extend roughly half a bond beyond the outermost atom.
+                box=(min(xs) - 8.0, min(ys) - 8.0, max(xs) + 8.0, max(ys) + 8.0),
+                bond_lengths_px=bond_lengths,
+            )
+        )
+    return elements
+
+
+_ARROW_SCORE = re.compile(r"data-overlap-score='([\d.]+)'")
+
+
+def _arrow_route_warnings(svg: str) -> list[str]:
+    """Turn the router's per-arrow overlap scores into visible warnings.
+
+    The score was already computed during routing but previously written into
+    the SVG and never read; an arrow forced across a structure now surfaces
+    instead of shipping silently.
+    """
+    scores = [float(value) for value in _ARROW_SCORE.findall(svg)]
+    bad = [score for score in scores if score > 45.0]
+    if not bad:
+        return []
+    return [
+        f"{len(bad)} of {len(scores)} curved arrow(s) could not be routed clear of "
+        f"drawn structures (worst overlap score {max(bad):.0f}); consider adjusting "
+        "curve_side/curvature or panel layout."
+    ]
+
+
 def render_mechanism_canvas(spec: dict[str, Any], output_dir: str | None = None) -> dict[str, Any]:
     warnings: list[str] = []
     validation = validate_mechanism_spec(spec)
@@ -2872,6 +2940,24 @@ def render_mechanism_canvas(spec: dict[str, Any], output_dir: str | None = None)
     width = metrics["width"]
     height = metrics["height"]
     top_margin = metrics["top_margin"]
+    if layout.get("uniform_bond_scale", True) and panels:
+        # Dry-run the layout to find the tightest panel, then cap every panel at
+        # that scale so the whole mechanism shares one bond length. Without this
+        # a small intermediate (e.g. hydroxide) draws with bonds twice as long
+        # as the crowded transition-state panel next to it.
+        min_scale: float | None = None
+        for idx, panel in enumerate(panels):
+            row = idx // columns
+            col = idx % columns
+            box = (col * panel_w, top_margin + row * panel_h, panel_w, panel_h)
+            for entry in _layout_panel_molecules(
+                panel=panel, panel_index=idx + 1, box=box, warnings=[], style=style, align_targets=None
+            ):
+                scale = float(entry.get("px_scale") or 0.0)
+                if scale > 0.0 and entry["mol"].GetNumBonds() > 0:
+                    min_scale = scale if min_scale is None else min(min_scale, scale)
+        if min_scale is not None and min_scale < float(style["max_bond_px"]):
+            style = {**style, "max_bond_px": min_scale}
     parts = _svg_header(width, height, style=style)
     title = spec.get("title", "Detailed stepwise mechanism")
     subtitle = spec.get("subtitle")
@@ -2882,6 +2968,7 @@ def render_mechanism_canvas(spec: dict[str, Any], output_dir: str | None = None)
     if not panels:
         warnings.append("Mechanism spec has no panels/intermediates.")
     alignment_by_map: dict[int, tuple[float, float]] = {}
+    audit_elements: list[Any] = []
     for idx, panel in enumerate(panels):
         row = idx // columns
         col = idx % columns
@@ -2897,6 +2984,7 @@ def render_mechanism_canvas(spec: dict[str, Any], output_dir: str | None = None)
             align_targets=align_targets,
         )
         parts.append(panel_svg)
+        audit_elements.extend(_audit_elements_for_panel(mol_entries, idx + 1))
         for atom_map, relative in _relative_map_positions(mol_entries, box).items():
             alignment_by_map.setdefault(atom_map, relative)
         if idx < len(panels) - 1:
@@ -2915,6 +3003,23 @@ def render_mechanism_canvas(spec: dict[str, Any], output_dir: str | None = None)
         )
     parts.append("</svg>")
     svg = "\n".join(parts)
+    warnings.extend(_arrow_route_warnings(svg))
+    from .figure_audit import audit_figure
+
+    figure_checks = audit_figure(
+        renderer="codex_mechanism_canvas",
+        width=width,
+        height=height,
+        elements=audit_elements,
+        target_bond_px=float(style["max_bond_px"]) * 1.5,
+    )
+    validation = {
+        **validation,
+        "figure_audit": figure_checks,
+        "blocking_issues": [*validation["blocking_issues"], *figure_checks["blocking_issues"]],
+        "warnings": [*validation["warnings"], *figure_checks["warnings"]],
+    }
+    warnings.extend(figure_checks["warnings"])
     cdxml = render_cdxml_document(spec, warnings)
     chemdoodle_json = render_chemdoodle_json(spec)
     chemdoodle_html = render_chemdoodle_html(spec, chemdoodle_json)
@@ -2975,6 +3080,16 @@ def render_mechanism_canvas(spec: dict[str, Any], output_dir: str | None = None)
         ketcher_path = path / "mechanism.ketcher.json"
         marvin_path = path / "mechanism.marvin.json"
         svg_path.write_text(svg, encoding="utf-8")
+        from .figure_audit import raster_ink_check, svg_to_png
+
+        png_path = path / "mechanism.png"
+        png_warnings = svg_to_png(svg_path, png_path)
+        if png_path.exists() and not png_warnings:
+            ink_warnings, ink_summary = raster_ink_check(png_path)
+            warnings.extend(ink_warnings)
+            result["publication_checks"]["figure_audit"]["raster_check"] = ink_summary
+        else:
+            warnings.extend(png_warnings)
         cdxml_path.write_text(cdxml, encoding="utf-8")
         spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
         trace_path.write_text(result["mechanism_trace_json"], encoding="utf-8")
@@ -2984,6 +3099,7 @@ def render_mechanism_canvas(spec: dict[str, Any], output_dir: str | None = None)
         marvin_path.write_text(json.dumps(marvin_adapter, ensure_ascii=False, indent=2), encoding="utf-8")
         result["output_files"] = [
             str(svg_path),
+            *([str(png_path)] if png_path.exists() else []),
             str(cdxml_path),
             str(spec_path),
             str(trace_path),

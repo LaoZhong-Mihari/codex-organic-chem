@@ -20,15 +20,12 @@ def test_charges_record_for_ethanol():
     assert rec["results"]["atom_charges"]
 
 
-def test_xtb_unavailable_or_ok_is_structured():
-    result = chem_compute("CCO", tasks=["xtb_opt"])
-    rec = _record(result, "xtb_opt")
-    assert rec["status"] in {"unavailable", "ok", "error"}
-    assert rec["method"] == "xtb_opt"
+def test_conformer_record_for_butanol():
+    result = chem_compute("CCCCO", tasks=["conformers"], num_confs=4)
+    rec = _record(result, "rdkit_conformers")
+    assert rec["status"] == "ok"
 
 
-def test_crest_record_is_structured():
-    result = chem_compute("CCO", tasks=["crest"])
-    rec = _record(result, "crest_conformer_search")
-    assert rec["status"] in {"unavailable", "available"}
-    assert rec["method"] == "crest_conformer_search"
+# xTB and CREST records are covered in tests/test_semiempirical.py, which asserts
+# on the returned numbers. The status-membership assertions that used to live here
+# were satisfied by a CREST stub that never executed anything.
