@@ -1,6 +1,6 @@
 [project]
 name = "codex-organic-chem"
-version = "0.1.0"
+version = "1.0.0"
 description = "Local open-source organic chemistry toolchain for Codex: OCSR, structure normalization, drawing, lightweight computation, reaction analysis, and mechanism drafting."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -31,4 +31,3 @@ packages = ["src/codex_organic_chem"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-

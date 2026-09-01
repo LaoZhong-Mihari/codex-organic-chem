@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-01
+
 ### Added
 
 - Real GFN2-xTB calculation paths for `xtb_opt`, `xtb_reactivity`, and

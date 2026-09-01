@@ -28,7 +28,7 @@ def search_crossref(query: str, rows: int = 5, timeout_s: int = 12) -> dict[str,
         url,
         headers={
             "Accept": "application/json",
-            "User-Agent": "codex-organic-chem/0.1.0 (local research assistant)",
+            "User-Agent": "codex-organic-chem/1.0.0 (local research assistant)",
         },
     )
     try:
@@ -72,4 +72,3 @@ def search_crossref(query: str, rows: int = 5, timeout_s: int = 12) -> dict[str,
 
 def literature_search(query: str, rows: int = 5) -> dict[str, Any]:
     return search_crossref(query=query, rows=rows)
-

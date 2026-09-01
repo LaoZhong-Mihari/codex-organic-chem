@@ -604,7 +604,7 @@ fetchSession().then(render).catch(()=>{});
 
 
 class ReviewRequestHandler(BaseHTTPRequestHandler):
-    server_version = "CodexChemReview/0.1"
+    server_version = "CodexChemReview/1.0"
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         return

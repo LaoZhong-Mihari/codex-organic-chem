@@ -44,4 +44,4 @@ __all__ = [
     "chem_tool_doctor",
 ]
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
