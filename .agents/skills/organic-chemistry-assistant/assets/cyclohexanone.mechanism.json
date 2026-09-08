@@ -1,0 +1,269 @@
+{
+  "spec_version": "2.1",
+  "title": "Cyclohexanone cyanohydrin: illustrative mechanism",
+  "journal_style": "acs",
+  "presentation_mode": "publication",
+  "layout": {
+    "columns": 1,
+    "panel_width": 1200,
+    "panel_height": 232,
+    "top_margin": 10,
+    "bottom_margin": 10,
+    "show_panel_titles": false,
+    "show_atom_maps": false,
+    "align_atom_maps": false,
+    "show_footer": false
+  },
+  "evidence": [
+    "GPT-6-authored educational fixture for software validation; not an experimental finding."
+  ],
+  "uncertainty": "A textbook mechanism hypothesis, with the HCN proton donor retained in both states. Conditions and selectivity are not validated.",
+  "panels": [
+    {
+      "title": "Cyanide addition",
+      "molecules": [
+        {
+          "smiles": "[C-:1]#[N:2]",
+          "side": "reactant",
+          "show_carbons": true
+        },
+        {
+          "smiles": "[C:3]1(=[O:4])[CH2:8][CH2:9][CH2:10][CH2:11][CH2:12]1",
+          "side": "reactant",
+          "show_carbons": true,
+          "depiction": {
+            "bond_axis": {
+              "atom_maps": [
+                3,
+                8
+              ],
+              "angle_deg": -150
+            }
+          }
+        },
+        {
+          "smiles": "[H:5][C:6]#[N:7]",
+          "side": "reactant",
+          "show_carbons": true
+        },
+        {
+          "smiles": "[C:1](#[N:2])[C:3]1([O-:4])[CH2:8][CH2:9][CH2:10][CH2:11][CH2:12]1",
+          "side": "product",
+          "show_carbons": true,
+          "depiction": {
+            "bond_axis": {
+              "atom_maps": [
+                3,
+                8
+              ],
+              "angle_deg": -150
+            }
+          }
+        },
+        {
+          "smiles": "[H:5][C:6]#[N:7]",
+          "side": "product",
+          "show_carbons": true
+        }
+      ],
+      "starting_state": {
+        "molecule_indices": [
+          1,
+          2,
+          3
+        ]
+      },
+      "expected_state": {
+        "molecule_indices": [
+          4,
+          5
+        ]
+      },
+      "reaction_arrow_after": 3,
+      "molecule_y_offset": 48,
+      "molecule_height_fraction": 0.6,
+      "operator_y_offset": 116,
+      "arrows": [
+        {
+          "from_lone_pair_atom_map": 1,
+          "to_atom_map": 3,
+          "from_molecule_index": 1,
+          "to_molecule_index": 2,
+          "kind": "electron_pair",
+          "electron_count": 2,
+          "curvature": -32
+        },
+        {
+          "from_bond": [
+            3,
+            4
+          ],
+          "to_atom_map": 4,
+          "from_molecule_index": 2,
+          "to_molecule_index": 2,
+          "kind": "electron_pair",
+          "electron_count": 2,
+          "curvature": 32
+        }
+      ],
+      "graph_edits": [
+        {
+          "type": "form_bond",
+          "atom_maps": [
+            1,
+            3
+          ],
+          "order": 1
+        },
+        {
+          "type": "change_bond",
+          "atom_maps": [
+            3,
+            4
+          ],
+          "from": 2,
+          "to": 1
+        },
+        {
+          "type": "formal_charge",
+          "atom_map": 1,
+          "from": -1,
+          "to": 0
+        },
+        {
+          "type": "formal_charge",
+          "atom_map": 4,
+          "from": 0,
+          "to": -1
+        }
+      ],
+      "lone_pairs": [
+        {
+          "molecule_index": 1,
+          "atom_map": 1,
+          "count": 1,
+          "visible_count": 1
+        }
+      ]
+    },
+    {
+      "title": "Proton transfer",
+      "molecules": [
+        {
+          "smiles": "[C:1](#[N:2])[C:3]1([O-:4])[CH2:8][CH2:9][CH2:10][CH2:11][CH2:12]1",
+          "side": "reactant",
+          "show_carbons": true,
+          "depiction": {
+            "bond_axis": {
+              "atom_maps": [
+                3,
+                8
+              ],
+              "angle_deg": -150
+            }
+          }
+        },
+        {
+          "smiles": "[H:5][C:6]#[N:7]",
+          "side": "reactant",
+          "show_carbons": true
+        },
+        {
+          "smiles": "[C:1](#[N:2])[C:3]1([O:4][H:5])[CH2:8][CH2:9][CH2:10][CH2:11][CH2:12]1",
+          "side": "product",
+          "show_carbons": true,
+          "depiction": {
+            "bond_axis": {
+              "atom_maps": [
+                3,
+                8
+              ],
+              "angle_deg": -150
+            }
+          }
+        },
+        {
+          "smiles": "[C-:6]#[N:7]",
+          "side": "product",
+          "show_carbons": true
+        }
+      ],
+      "starting_state": {
+        "molecule_indices": [
+          1,
+          2
+        ]
+      },
+      "expected_state": {
+        "molecule_indices": [
+          3,
+          4
+        ]
+      },
+      "reaction_arrow_after": 2,
+      "molecule_y_offset": 48,
+      "molecule_height_fraction": 0.6,
+      "operator_y_offset": 116,
+      "arrows": [
+        {
+          "from_lone_pair_atom_map": 4,
+          "to_atom_map": 5,
+          "from_molecule_index": 1,
+          "to_molecule_index": 2,
+          "kind": "electron_pair",
+          "electron_count": 2,
+          "curvature": -32
+        },
+        {
+          "from_bond": [
+            5,
+            6
+          ],
+          "to_atom_map": 6,
+          "from_molecule_index": 2,
+          "to_molecule_index": 2,
+          "kind": "electron_pair",
+          "electron_count": 2,
+          "curvature": 28
+        }
+      ],
+      "graph_edits": [
+        {
+          "type": "form_bond",
+          "atom_maps": [
+            4,
+            5
+          ],
+          "order": 1
+        },
+        {
+          "type": "break_bond",
+          "atom_maps": [
+            5,
+            6
+          ]
+        },
+        {
+          "type": "formal_charge",
+          "atom_map": 4,
+          "from": -1,
+          "to": 0
+        },
+        {
+          "type": "formal_charge",
+          "atom_map": 6,
+          "from": 0,
+          "to": -1
+        }
+      ],
+      "lone_pairs": [
+        {
+          "molecule_index": 1,
+          "atom_map": 4,
+          "count": 3,
+          "visible_count": 1
+        }
+      ]
+    }
+  ]
+}

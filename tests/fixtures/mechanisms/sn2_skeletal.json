@@ -1,0 +1,229 @@
+{
+  "spec_version": "2.1",
+  "title": "Skeletal SN2 illustration",
+  "journal_style": "acs",
+  "presentation_mode": "publication",
+  "layout": {
+    "columns": 1,
+    "panel_width": 760,
+    "panel_height": 188,
+    "top_margin": 10,
+    "bottom_margin": 10,
+    "align_atom_maps": true,
+    "show_atom_maps": false,
+    "show_arrow_labels": false,
+    "show_molecule_labels": false,
+    "show_notes": false,
+    "show_footer": false,
+    "show_partial_charges": false,
+    "lone_pair_display": "source_only",
+    "arrow_color": "#111",
+    "arrow_width": 1.8
+  },
+  "evidence": [
+    "Rule-template SN2 example for renderer validation; not literature proof."
+  ],
+  "uncertainty": "Educational validation fixture; human review is required for manuscript use.",
+  "panels": [
+    {
+      "title": "Backside attack",
+      "starting_state": {
+        "role": "reactants",
+        "molecule_indices": [
+          1,
+          2
+        ]
+      },
+      "expected_state": {
+        "role": "products",
+        "molecule_indices": [
+          3,
+          4
+        ]
+      },
+      "reaction_arrow_after": 2,
+      "molecule_y_offset": 34,
+      "molecule_height_fraction": 0.58,
+      "operator_y_offset": 94,
+      "molecules": [
+        {
+          "smiles": "[OH-:1]",
+          "label": "nucleophile",
+          "side": "reactant",
+          "atom_labels": {
+            "1": "HO"
+          }
+        },
+        {
+          "smiles": "[CH2:2]([CH2:4][CH2:5][CH3:6])[Br:3]",
+          "label": "alkyl bromide",
+          "side": "reactant",
+          "show_carbons": true,
+          "depiction": {
+            "bond_axis": {
+              "atom_maps": [
+                2,
+                4
+              ],
+              "angle_deg": 120
+            }
+          }
+        },
+        {
+          "smiles": "[OH:1][CH2:2]([CH2:4][CH2:5][CH3:6])",
+          "label": "methanol product",
+          "side": "product",
+          "show_carbons": true,
+          "flip_x": true,
+          "atom_labels": {
+            "1": "HO"
+          },
+          "depiction": {
+            "bond_axis": {
+              "atom_maps": [
+                2,
+                4
+              ],
+              "angle_deg": 120
+            }
+          }
+        },
+        {
+          "smiles": "[Br-:3]",
+          "label": "leaving group",
+          "side": "product"
+        }
+      ],
+      "lone_pairs": [
+        {
+          "molecule_index": 1,
+          "atom_map": 1,
+          "count": 3,
+          "visible_count": 1
+        }
+      ],
+      "partial_charges": [
+        {
+          "molecule_index": 2,
+          "atom_map": 2,
+          "label": "\u03b4+"
+        },
+        {
+          "molecule_index": 2,
+          "atom_map": 3,
+          "label": "\u03b4-"
+        }
+      ],
+      "charges": [
+        {
+          "molecule_index": 1,
+          "atom_map": 1,
+          "label": "\u2212",
+          "color": "#111"
+        },
+        {
+          "molecule_index": 4,
+          "atom_map": 3,
+          "label": "\u2212",
+          "color": "#111"
+        }
+      ],
+      "arrows": [
+        {
+          "from_lone_pair_atom_map": 1,
+          "from_molecule_index": 1,
+          "to_atom_map": 2,
+          "to_molecule_index": 2,
+          "kind": "electron_pair",
+          "electron_count": 2,
+          "label": "O lp \u2192 C",
+          "curvature": -26,
+          "start_gap": 2,
+          "end_gap": 18
+        },
+        {
+          "from_bond": [
+            2,
+            3
+          ],
+          "from_molecule_index": 2,
+          "to_atom_map": 3,
+          "to_molecule_index": 2,
+          "kind": "electron_pair",
+          "electron_count": 2,
+          "label": "C\u2013Br \u2192 Br",
+          "curvature": -22,
+          "start_gap": 1,
+          "end_gap": 5.5
+        }
+      ],
+      "graph_edits": [
+        {
+          "type": "form_bond",
+          "atom_maps": [
+            1,
+            2
+          ],
+          "order": 1,
+          "source_arrow": 1
+        },
+        {
+          "type": "break_bond",
+          "atom_maps": [
+            2,
+            3
+          ],
+          "source_arrow": 2
+        },
+        {
+          "type": "formal_charge",
+          "atom_map": 3,
+          "from": 0,
+          "to": -1
+        },
+        {
+          "type": "formal_charge",
+          "atom_map": 1,
+          "from": -1,
+          "to": 0
+        }
+      ],
+      "bond_changes": {
+        "formed": [
+          {
+            "atom_maps": [
+              1,
+              2
+            ],
+            "order": "SINGLE"
+          }
+        ],
+        "broken": [
+          {
+            "atom_maps": [
+              2,
+              3
+            ],
+            "order": "SINGLE"
+          }
+        ],
+        "changed": []
+      },
+      "charge_changes": [
+        {
+          "atom_map": 1,
+          "from": -1,
+          "to": 0
+        },
+        {
+          "atom_map": 3,
+          "from": 0,
+          "to": -1
+        }
+      ],
+      "notes": [
+        "Electron pair originates at hydroxide lone pair; leaving-group bond electrons end on bromide."
+      ]
+    }
+  ]
+}

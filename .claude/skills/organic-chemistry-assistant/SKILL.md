@@ -35,14 +35,41 @@ capabilities only when needed: `codex-chem doctor`.
 
 ## Mechanistic reasoning
 
-1. Establish substrate and reagent roles from validated structures.
-2. Mark likely reactive atoms/bonds and the groups controlling chemo-, regio-,
-   and stereoselectivity or acid/base state.
-3. Enumerate plausible elementary steps before choosing one.
-4. Balance each step with `chem_reaction_analyze`, then check what it cannot:
-   conserved scaffolds, stereochemistry, which atoms need mapping.
-5. State why the chosen path beats close alternatives, especially when another
-   functional group could react under the same conditions.
+For mechanisms, read [references/mechanism-spec.md](references/mechanism-spec.md).
+For drawing quality, also use the concrete reference-and-inspection workflow in
+[references/mechanism-graphics.md](references/mechanism-graphics.md).
+Use one chemical source of truth: a mapped state + object-anchored electron
+moves + explicit next state. Write a MechanismSpec 2.1 JSON before drawing;
+the supplied [SN2 example](assets/sn2.mechanism.json) shows the exact fields.
+
+- Build the elementary steps from the validated structures and the specified
+  conditions. `chem_mechanism_draft` is a rule-template hypothesis with a
+  **reaction preview**, not a mechanism generator or evidence for the pathway.
+  A stronger model still needs to supply the intermediates and electron moves.
+- Keep atom maps stable, map each transferred H as a separate atom, and include
+  participating acids/bases and byproducts in both states. All arrows within
+  an elementary step act simultaneously on its starting state.
+- Run `chem_mechanism_validate` (CLI `mechanism-validate`) before rendering.
+  Fix invalid states, missing arrows and graph edits; do not explain away a
+  mass/charge discrepancy with a caption. `semantic_checks.status=valid` proves
+  only the supported electron bookkeeping. `incomplete` or `unsupported`
+  cannot support a claim that the mechanism was validated.
+- Check the live server's `chem_mechanism_spec_example`: if it returns a
+  pre-2.1 example, omits `layout.renderer: "compact"`, or lacks the validator,
+  use the updated checkout's CLI for **both validation and rendering**.
+  Compact output must report `figure_audit.renderer: "rdkit_compact_mechanism"`;
+  fall back to the CLI if a stale server still returns `codex_mechanism_canvas`.
+  A running MCP process may retain old code even after local files are synced;
+  a newer validator alone does not establish that the renderer was reloaded.
+- Render with `chem_mechanism_render`, inspect the image, and read the emitted
+  trace back. Use `mechanism.trace.json` or the SVG's embedded chemical bundle
+  to continue reasoning; a screenshot or an OCSR molecule alone loses electron
+  movement and state identity. Keep spec, SVG and trace from the same export.
+- Use the checked graph changes to explain which sites react and what remains
+  available for the next step. Separately assess competing paths, solvent,
+  acid/base state and stereoelectronic constraints. State conditional predictions
+  and evidence limits; connectivity checks alone do not establish kinetics,
+  selectivity, stereochemical outcome or experimental mechanism.
 
 ## Images in: OCSR
 
@@ -70,21 +97,33 @@ capabilities only when needed: `codex-chem doctor`.
 
 ## Images out: figures
 
-All renderers share one fixed-geometry engine (uniform bond length, ACS-style
-defaults) and audit their own output — overlap, clipping, bond-length drift,
-blank exports. Results carry `publication_checks`; blocking issues downgrade
-`status` to `blocked_for_publication`.
+Molecule, route and compact mechanism figures share the RDKit fixed-geometry
+painter. Use compact mechanisms by default; `layout.renderer: "legacy"` retains
+the old canvas only for compatibility. Results carry `publication_checks`;
+blocking issues downgrade `status` to `blocked_for_publication`.
 
 - Molecules/reactions: `chem_draw` (SVG master; PNG derived after the audit via
   `output_file`).
 - Routes/schemes: `chem_route_figure` (`style_preset`: `acs` default, `rsc`,
   `presentation`). Use it for any rendered scheme; RDKit one-call previews are
   for internal checks only.
-- Mechanisms: `chem_input_review` first; after confirmation `chem_mechanism_draft`
-  (hypothesis) and `chem_mechanism_render` (atom-mapped panels, curved arrows
-  anchored to lone pairs/bonds/atoms, CDXML/ChemDoodle/Ketcher exports).
+- Mechanisms: resolve ambiguous/user-image inputs through `chem_input_review`.
+  Explicit text examples, tool tests and assistant-authored educational drafts
+  can proceed directly through normalization and validation; do not ask users
+  to approve each benchmark molecule. Require confirmed input for manuscript
+  claims. Use the mechanism workflow above for actual curved-arrow artwork.
 - Chemistry-aware renderers draw all bonds and arrows; hand-built SVG/PIL/canvas
   may only do page composition. Prose belongs in the caption, not the graphic.
+- For a publication-like mechanism, inspect actual published Schemes and record
+  their DOI and Scheme number. Use skeletal structures, ordinary charge glyphs,
+  a shared bond scale, and short local electron arrows. Move/rotate the reagent
+  next to the reacting atom before trying a larger curve. Preserve the common
+  scaffold across states; keep captions and long explanations outside the art.
+- Open each exported image at its intended reading size and magnified. Inspect
+  arrow tails, arrowheads, implicit H, charges, lone pairs, plus signs and all
+  crossings. Compare it with a normal reaction figure of the same structures.
+  A nonblank PNG, valid graph, or passing geometric audit does not establish
+  good layout. Fix visible defects and render again before showing the result.
 - Report artifact status honestly: confirmed, draft, or blocked — with the
   audit's warnings. `blocked_for_publication` output must be fixed or reported
   as blocked, never shipped. A figure is "publication-ready" only when the
@@ -117,5 +156,6 @@ uv run codex-chem route-figure --spec route.spec.json --output-dir out --format 
 uv run codex-chem reaction-analyze --reaction "CBr.[OH-]>>CO.[Br-]" --mode sanity_check
 uv run codex-chem compute --smiles "CC(=O)C" --task xtb_reactivity --solvent water
 uv run codex-chem mechanism-render --spec mechanism.spec.json --output-dir out
+uv run codex-chem mechanism-validate --spec mechanism.spec.json
 uv run codex-chem synthesis-suggest --target-smiles "CC(=O)Oc1ccccc1C(=O)O" --confirmed
 ```

@@ -8,7 +8,7 @@ from .figure_tools import figure_tool_statuses
 from .input_review import prepare_input_review
 from .literature import literature_search
 from .mechanism import draft_mechanism
-from .mechanism_canvas import mechanism_spec_example, render_mechanism_canvas
+from .mechanism_canvas import mechanism_spec_example, render_mechanism_canvas, validate_mechanism_spec
 from .models import CalculationRecord
 from .ocsr import parse_image
 from .rdkit_tools import (
@@ -280,6 +280,11 @@ def chem_mechanism_draft(
 
 def chem_mechanism_render(spec: dict[str, Any], output_dir: str | None = None) -> dict[str, Any]:
     return render_mechanism_canvas(spec=spec, output_dir=output_dir)
+
+
+def chem_mechanism_validate(spec: dict[str, Any]) -> dict[str, Any]:
+    """Check state/electron consistency without rendering or claiming plausibility."""
+    return validate_mechanism_spec(spec)
 
 
 def chem_mechanism_spec_example() -> dict[str, Any]:

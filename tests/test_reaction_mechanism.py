@@ -1,4 +1,5 @@
 import re
+import xml.etree.ElementTree as ET
 
 from codex_organic_chem.service import (
     chem_mechanism_draft,
@@ -59,14 +60,16 @@ def test_mechanism_render_draws_atom_mapped_canvas(tmp_path):
     spec = chem_mechanism_spec_example()
     result = chem_mechanism_render(spec, output_dir=str(tmp_path))
     assert result["status"] == "ok"
-    assert result["spec_version"] == "2.0"
+    assert result["spec_version"] == "2.1"
     assert "HO" in result["svg"]
-    assert ">H3C<" in result["svg"]
-    assert ">CH3<" in result["svg"]
-    assert "lp → C" not in result["svg"]
-    assert "δ+" not in result["svg"]
-    assert "nucleophile" not in result["svg"]
-    assert "alkyl bromide" not in result["svg"]
+    # Hidden semantic metadata may contain labels absent from the visible art.
+    visible_text = " ".join("".join(t.itertext()) for t in ET.fromstring(result["svg"]).iter("{http://www.w3.org/2000/svg}text"))
+    assert "data-painter='rdkit-shared'" in result["svg"]
+    assert "stroke-width:1.6px" in result["svg"]
+    assert "lp → C" not in visible_text
+    assert "δ+" not in visible_text
+    assert "nucleophile" not in visible_text
+    assert "alkyl bromide" not in visible_text
     assert "[OH-:1].[CH3:2][Br:3]" not in str(spec["panels"][0]["molecules"])
     assert "mechanism.svg" in result["output_files"][0]
     assert (tmp_path / "mechanism.svg").exists()
@@ -85,15 +88,14 @@ def test_mechanism_render_draws_atom_mapped_canvas(tmp_path):
     assert "<arrow" in result["cdxml"]
     assert "class='lone-pair-object'" in result["svg"]
     assert result["svg"].count("class='lone-pair-object'") == 1
-    assert "class='formal-charge-marker'" in result["svg"]
-    assert "class='charge-ring'" in result["svg"]
+    assert "class='charge-ring'" not in result["svg"]
     assert "data-routed-curvature" in result["svg"]
     assert "data-overlap-score" in result["svg"]
     arrow_paths = re.findall(r"<path class='mech-arrow' d='M ([^']+)'", result["svg"])
     assert arrow_paths
     first_arrow_numbers = [float(value) for value in re.findall(r"-?\d+(?:\.\d+)?", arrow_paths[0])]
-    assert first_arrow_numbers[-2] < 212.6
-    assert abs(first_arrow_numbers[-2] - 212.6) > 5.0
+    assert len(first_arrow_numbers) == 10  # Cubic body and tangent finish bisecting the open V.
+    assert all(a["length_bonds"] < 2.4 for a in result["publication_checks"]["figure_audit"]["electron_arrows"])
     assert "data-source-object='p1:m1:lp:1:0'" in result["svg"]
     assert "data-target-object='p1:m2:atom:2'" in result["svg"]
     assert "data-source-object='p1:m2:bond:2-3'" in result["svg"]
@@ -127,7 +129,7 @@ def test_mechanism_render_warns_on_atom_center_arrow_source():
     spec["panels"][0]["arrows"][0].pop("from_lone_pair_atom_map")
     spec["panels"][0]["arrows"][0]["from_atom_map"] = 1
     result = chem_mechanism_render(spec)
-    assert result["status"] == "ok_with_warnings"
+    assert result["status"] == "blocked_for_publication"
     assert any("source is an atom center" in warning for warning in result["warnings"])
 
 
@@ -135,7 +137,7 @@ def test_mechanism_render_warns_on_disconnected_fragments_with_arrows():
     spec = chem_mechanism_spec_example()
     spec["panels"][0]["molecules"] = [{"smiles": "[OH-:1].[CH3:2][Br:3]", "label": "bad combined reactants"}]
     result = chem_mechanism_render(spec)
-    assert result["status"] == "ok_with_warnings"
+    assert result["status"] == "blocked_for_publication"  # The old state's indices are now invalid.
     assert any("contains disconnected fragments" in warning for warning in result["warnings"])
 
 
@@ -170,7 +172,8 @@ def test_mechanism_render_handles_single_electron_pusher():
     ]
     spec["panels"][0]["graph_edits"] = [{"type": "radical", "atom_map": 3}]
     result = chem_mechanism_render(spec)
-    assert result["status"] == "ok"
+    # It renders a fishhook preview, but a lone fishhook cannot give SN2 products.
+    assert result["status"] == "blocked_for_publication"
     assert "arrow-radical" in result["svg"]
     assert "data-source-object='p1:m2:bond:2-3'" in result["svg"]
     assert "data-target-object='p1:m2:atom:3'" in result["svg"]
@@ -222,9 +225,8 @@ def test_mechanism_render_preserves_atom_label_style_and_routes_arrows_to_bounda
     }
     result = chem_mechanism_render(spec)
     svg = result["svg"]
-    assert result["status"] == "ok"
+    assert result["status"] == "blocked_for_publication"  # Displayed + contradicts neutral carbon.
     assert "class='atom-hydrogen'" not in svg
-    assert ">O<" in svg
-    assert ">CH2<" in svg
-    assert ">Br<" in svg
-    assert "class='formal-charge-marker'" in svg
+    assert "data-painter='rdkit-shared'" in svg
+    assert "class='atom-0'" in svg and "class='atom-2'" in svg
+    assert "class='formal-charge-marker'" not in svg

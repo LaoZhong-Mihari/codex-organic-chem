@@ -83,6 +83,7 @@ The MCP tools have the planned names:
 - `chem_reaction_analyze`
 - `chem_mechanism_draft`
 - `chem_mechanism_render`
+- `chem_mechanism_validate`
 - `chem_mechanism_spec_example`
 - `chem_route_figure`
 - `chem_route_figure_spec_example`
@@ -171,13 +172,14 @@ For accurate figure output, use an explicit atom-mapped mechanism canvas:
 
 ```bash
 codex-chem mechanism-render --example
+codex-chem mechanism-validate --spec mechanism.spec.json
 codex-chem mechanism-render --spec mechanism.spec.json --output-dir mechanism_out
 ```
 
 The spec must provide every intermediate and every curved arrow anchor using
 atom-map numbers or atom-map bond pairs. It supports:
 
-- `spec_version: "2.0"` semantic mechanism specs,
+- `spec_version: "2.1"` semantic mechanism specs (legacy 1.0/2.0 accepted),
 - intermediate molecules as mapped SMILES/Molfile,
 - curved electron-pair and radical arrows,
 - lone-pair dots, with publication defaults that show only mechanistically
@@ -187,6 +189,38 @@ atom-map numbers or atom-map bond pairs. It supports:
 - graph edits for bond formation/breaking, charge changes, proton transfers,
   resonance, radicals, and counterion bookkeeping,
 - panel titles, notes, captions, SVG output, and ChemDraw-like CDXML output.
+
+Version 2.1 requires explicit, disjoint starting/product molecule selections
+for every elementary step. The validator checks mapped atom/isotope identity,
+hydrogen and charge conservation, electron-source capacity, simultaneous arrow
+replay and declared graph edits against the actual next state. `semantic_checks`
+reports `valid`, `invalid`, `incomplete` or `unsupported`; valid means supported
+electron bookkeeping, not kinetic or experimental proof. Currently supported
+replay covers localized main-group pair transfers and paired bond homolysis.
+General radical and aromatic/metal mechanisms require further analysis.
+
+Transferred H atoms remain explicit and mapped. The trace resolves each side
+separately, computes changes from the structures and retains radical/stereo
+metadata. SVG embeds the same spec and trace, with a source-spec SHA-256, so AI
+can read the chemistry without guessing from pixels. This digest does not
+authenticate later manual edits to SVG paths. The canvas blocks stereo/E-Z and
+isotope depictions it cannot faithfully draw. Editor exports remain review
+adapters; native-editor round-trip fidelity is not established by these tests.
+
+See the [mechanism authoring contract](.agents/skills/organic-chemistry-assistant/references/mechanism-spec.md).
+For figure quality, use the [published-reference and visual-review workflow](.agents/skills/organic-chemistry-assistant/references/mechanism-graphics.md).
+The default compact renderer now uses the shared RDKit skeletal painter,
+sizes rows to their ink, relocates small reagents near reactive atoms and keeps
+unchanged mapped cores aligned. Electron arrows use independent cubic end
+tangents; sampled collisions with structures/operators/other arrows and arrows
+longer than 3.5 bond lengths block the figure. This is a layout heuristic, not a
+journal standard or a substitute for viewing the image. The 2× PNG is a review
+preview; the SVG is the vector master. `layout.renderer: "legacy"` retains the
+old canvas for compatibility. Legacy cell dimensions no longer stretch compact
+figures; use molecule `depiction` and arrow `routing` fields for art direction.
+Run `uv run python scripts/benchmark_mechanisms.py --output-dir outputs/mechanisms`
+for five curated classes, SVG/JSON round trips and deliberately invalid cases.
+This is a toolchain regression benchmark, not a model-versus-model accuracy study.
 
 When `--output-dir` is used, the result includes `editor_followup` with local
 ChemDraw/ChemDoodle/Marvin/Inkscape/Illustrator open-command templates for the

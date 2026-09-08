@@ -1,0 +1,161 @@
+{
+  "spec_version": "2.1",
+  "title": "E2 bookkeeping example",
+  "journal_style": "acs",
+  "presentation_mode": "publication",
+  "layout": {
+    "columns": 1,
+    "panel_width": 1200,
+    "panel_height": 232,
+    "top_margin": 10,
+    "bottom_margin": 10,
+    "show_panel_titles": true,
+    "show_atom_maps": false,
+    "align_atom_maps": false,
+    "show_footer": false
+  },
+  "evidence": [
+    "GPT-6-authored educational fixture for software validation; not an experimental finding."
+  ],
+  "uncertainty": "This tests a possible E2 path only: competing SN2 and antiperiplanar geometry are not established by this 2D graph.",
+  "panels": [
+    {
+      "title": "Concerted E2 electron flow",
+      "molecules": [
+        {
+          "smiles": "[OH-:1]",
+          "side": "reactant",
+          "show_carbons": true
+        },
+        {
+          "smiles": "[CH2:2]([H:5])[CH2:3][Br:4]",
+          "side": "reactant",
+          "show_carbons": true
+        },
+        {
+          "smiles": "[OH:1][H:5]",
+          "side": "product",
+          "show_carbons": true
+        },
+        {
+          "smiles": "[CH2:2]=[CH2:3]",
+          "side": "product",
+          "show_carbons": true
+        },
+        {
+          "smiles": "[Br-:4]",
+          "side": "product",
+          "show_carbons": true
+        }
+      ],
+      "starting_state": {
+        "molecule_indices": [
+          1,
+          2
+        ]
+      },
+      "expected_state": {
+        "molecule_indices": [
+          3,
+          4,
+          5
+        ]
+      },
+      "reaction_arrow_after": 2,
+      "molecule_y_offset": 48,
+      "molecule_height_fraction": 0.6,
+      "operator_y_offset": 116,
+      "arrows": [
+        {
+          "from_lone_pair_atom_map": 1,
+          "to_atom_map": 5,
+          "from_molecule_index": 1,
+          "to_molecule_index": 2,
+          "kind": "electron_pair",
+          "electron_count": 2,
+          "curvature": -32
+        },
+        {
+          "from_bond": [
+            2,
+            5
+          ],
+          "to_bond": [
+            2,
+            3
+          ],
+          "from_molecule_index": 2,
+          "to_molecule_index": 2,
+          "kind": "electron_pair",
+          "electron_count": 2,
+          "curvature": 32
+        },
+        {
+          "from_bond": [
+            3,
+            4
+          ],
+          "to_atom_map": 4,
+          "from_molecule_index": 2,
+          "to_molecule_index": 2,
+          "kind": "electron_pair",
+          "electron_count": 2,
+          "curvature": -28
+        }
+      ],
+      "graph_edits": [
+        {
+          "type": "form_bond",
+          "atom_maps": [
+            1,
+            5
+          ],
+          "order": 1
+        },
+        {
+          "type": "break_bond",
+          "atom_maps": [
+            2,
+            5
+          ]
+        },
+        {
+          "type": "change_bond",
+          "atom_maps": [
+            2,
+            3
+          ],
+          "from": 1,
+          "to": 2
+        },
+        {
+          "type": "break_bond",
+          "atom_maps": [
+            3,
+            4
+          ]
+        },
+        {
+          "type": "formal_charge",
+          "atom_map": 1,
+          "from": -1,
+          "to": 0
+        },
+        {
+          "type": "formal_charge",
+          "atom_map": 4,
+          "from": 0,
+          "to": -1
+        }
+      ],
+      "lone_pairs": [
+        {
+          "molecule_index": 1,
+          "atom_map": 1,
+          "count": 3,
+          "visible_count": 1
+        }
+      ]
+    }
+  ]
+}

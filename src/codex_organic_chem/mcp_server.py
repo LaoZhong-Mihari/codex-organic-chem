@@ -12,6 +12,7 @@ from .service import (
     chem_mechanism_draft as _chem_mechanism_draft,
     chem_mechanism_render as _chem_mechanism_render,
     chem_mechanism_spec_example as _chem_mechanism_spec_example,
+    chem_mechanism_validate as _chem_mechanism_validate,
     chem_normalize_structure as _chem_normalize_structure,
     chem_ocsr_benchmark as _chem_ocsr_benchmark,
     chem_parse_image as _chem_parse_image,
@@ -160,6 +161,15 @@ def main() -> None:
     @mcp.tool()
     def chem_mechanism_render(spec: dict[str, Any], output_dir: str | None = None) -> dict[str, Any]:
         return _chem_mechanism_render(spec=spec, output_dir=output_dir)
+
+    @mcp.tool()
+    def chem_mechanism_validate(spec: dict[str, Any]) -> dict[str, Any]:
+        """Validate state identity, mapped H, electron bookkeeping and graph edits.
+
+        A valid result is internal consistency, not evidence for kinetics or
+        selectivity. Inspect semantic_checks separately from figure audits.
+        """
+        return _chem_mechanism_validate(spec)
 
     @mcp.tool()
     def chem_mechanism_spec_example() -> dict[str, Any]:

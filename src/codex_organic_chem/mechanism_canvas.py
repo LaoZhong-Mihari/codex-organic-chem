@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import re
 from html import escape
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .rdkit_tools import RDKIT_AVAILABLE
+from .mechanism_semantics import parse_molecule, resolve_states, state_selection, validate_semantics
 
 if RDKIT_AVAILABLE:  # pragma: no cover - exercised through service tests
     from rdkit import Chem
@@ -300,7 +302,7 @@ def _parse_molecule(spec: dict[str, Any]) -> tuple[Any | None, list[str]]:
     smiles = spec.get("smiles")
     molfile = spec.get("molfile")
     if smiles:
-        mol = Chem.MolFromSmiles(smiles, sanitize=True)
+        mol = parse_molecule(spec)
     elif molfile:
         mol = Chem.MolFromMolBlock(molfile, sanitize=True, removeHs=False)
     else:
@@ -308,6 +310,8 @@ def _parse_molecule(spec: dict[str, Any]) -> tuple[Any | None, list[str]]:
     if mol is None:
         return None, [f"Could not parse molecule spec: {spec.get('label') or smiles or 'molfile'}"]
     try:
+        # Our bond drawer needs integer Kekule orders, not six aromatic singles.
+        Chem.Kekulize(mol, clearAromaticFlags=True)
         AllChem.Compute2DCoords(mol)
     except Exception as exc:
         warnings.append(f"2D coordinate generation failed: {exc}")
@@ -349,10 +353,10 @@ def _atom_label(
     h_count = atom.GetTotalNumHs()
     if h_count == 0:
         return symbol
-    if symbol == "C" and neighbor_positions and atom_pos and len(neighbor_positions) == 1:
+    if neighbor_positions and atom_pos and len(neighbor_positions) == 1:
         neighbor_x, _ = neighbor_positions[0]
         if neighbor_x > atom_pos[0]:
-            return f"{_hydrogen_text(h_count)}C"
+            return f"{_hydrogen_text(h_count)}{symbol}"
     if h_count == 1:
         return f"{symbol}H"
     return f"{symbol}H{h_count}"
@@ -456,13 +460,13 @@ def _atom_label_layout(
     }
     if (
         label_override is not None
-        or atom.GetSymbol() != "C"
         or atom.GetTotalNumHs() <= 0
         or len(neighbor_positions or []) != 1
     ):
         return default
-    c_width = _estimated_text_width("C", font_size)
-    if label.endswith("C") and label.startswith("H"):
+    symbol = atom.GetSymbol()
+    c_width = _estimated_text_width(symbol, font_size)
+    if label.endswith(symbol) and label.startswith("H"):
         text_x = ax + c_width / 2
         return {
             "x": text_x,
@@ -471,7 +475,7 @@ def _atom_label_layout(
             "full_box": (text_x - width - 2, ay - half_height, text_x + 2, ay + half_height),
             "core_box": (ax - c_width / 2 - 2, ay - half_height, ax + c_width / 2 + 2, ay + half_height),
         }
-    if label.startswith("C") and "H" in label:
+    if label.startswith(symbol) and "H" in label:
         text_x = ax - c_width / 2
         return {
             "x": text_x,
@@ -552,7 +556,9 @@ def _draw_atom_label(
     )
     parts.append(
         f"<text class='atom' x='{layout['x']:.1f}' y='{layout['y']:.1f}' "
-        f"text-anchor='{layout['anchor']}' fill='{color}'>{escape(label)}</text>"
+        f"text-anchor='{layout['anchor']}' fill='{color}'>"
+        + re.sub(r"(?<=[A-Za-z])([0-9]+)", r"<tspan baseline-shift='sub' font-size='70%'>\1</tspan>", escape(label))
+        + "</text>"
     )
 
 
@@ -1604,6 +1610,8 @@ def validate_mechanism_spec(spec: dict[str, Any]) -> dict[str, Any]:
     graph_edit_checks: list[dict[str, Any]] = []
     panels = spec.get("panels", [])
     spec_version = str(spec.get("spec_version", "1.0"))
+    if spec_version not in {"1.0", "2.0", "2.1"}:
+        blocking_issues.append(f"Unsupported mechanism spec_version {spec_version!r}.")
     display = _display_options(spec)
     if not panels:
         blocking_issues.append("Mechanism spec has no panels; provide each elementary step/intermediate explicitly.")
@@ -1618,11 +1626,39 @@ def validate_mechanism_spec(spec: dict[str, Any]) -> dict[str, Any]:
                 blocking_issues.append(f"{panel_label}, molecule {mol_index}: provide mapped SMILES or Molfile.")
             mol, mol_warnings = _parse_molecule(mol_spec)
             warnings.extend(f"{panel_label}, molecule {mol_index}: {warning}" for warning in mol_warnings)
+            if mol is None:
+                blocking_issues.append(f"{panel_label}, molecule {mol_index}: structure could not be parsed/sanitized.")
+            elif any(a.GetChiralTag() != Chem.ChiralType.CHI_UNSPECIFIED for a in mol.GetAtoms()) or any(b.GetStereo() != Chem.BondStereo.STEREONONE for b in mol.GetBonds()):
+                blocking_issues.append(f"{panel_label}, molecule {mol_index}: this canvas does not render stereo wedges/E-Z annotations faithfully; use a stereo-capable chemical editor.")
+            if mol is not None and any(a.GetIsotope() for a in mol.GetAtoms()):
+                blocking_issues.append(f"{panel_label}, molecule {mol_index}: isotope labels are not yet supported by this canvas.")
             if mol is not None and len(Chem.GetMolFrags(mol)) > 1 and arrows:
                 warnings.append(
                     f"{panel_label}, molecule {mol_index}: contains disconnected fragments. "
                     "For mechanism figures, put each reactant/intermediate/byproduct in its own molecule entry so layout and arrows stay chemically readable."
                 )
+            if mol is not None:
+                for atom in mol.GetAtoms():
+                    n = atom.GetAtomMapNum()
+                    override = _atom_label_override(mol_spec, n)
+                    symbol, hydrogens = atom.GetSymbol(), _hydrogen_text(atom.GetTotalNumHs())
+                    if override is not None and override not in {symbol + hydrogens, hydrogens + symbol}:
+                        blocking_issues.append(f"{panel_label}, molecule {mol_index}: atom label override for {n} changes the element/hydrogen identity.")
+                    for lp in panel.get("lone_pairs", []):
+                        if lp.get("atom_map") != n or lp.get("molecule_index", mol_index) != mol_index:
+                            continue
+                        available = (Chem.GetPeriodicTable().GetNOuterElecs(atom.GetAtomicNum()) - atom.GetFormalCharge() - atom.GetTotalValence() - atom.GetNumRadicalElectrons()) / 2
+                        if lp.get("count", 1) > available or lp.get("count", 1) < 0 or lp.get("visible_count", 0) > lp.get("count", 1):
+                            blocking_issues.append(f"{panel_label}, molecule {mol_index}: lone-pair annotation for atom {n} exceeds the chemical/display population.")
+                for annotation in panel.get("charges", []):
+                    if annotation.get("molecule_index", mol_index) != mol_index:
+                        continue
+                    for atom in mol.GetAtoms():
+                        if atom.GetAtomMapNum() == annotation.get("atom_map"):
+                            declared = _normalize_charge_text(annotation.get("label", annotation.get("value", "")))
+                            actual = _normalize_charge_text(_charge_label(atom.GetFormalCharge()))
+                            if declared != actual:
+                                blocking_issues.append(f"{panel_label}, molecule {mol_index}: displayed charge for atom {atom.GetAtomMapNum()} disagrees with the structure.")
         atom_maps = _panel_atom_maps(panel, panel_index, warnings)
         if arrows and not atom_maps:
             blocking_issues.append(f"{panel_label}: arrows require atom-mapped molecules.")
@@ -1674,10 +1710,15 @@ def validate_mechanism_spec(spec: dict[str, Any]) -> dict[str, Any]:
         has_lone_pair_source = any("from_lone_pair_atom_map" in arrow for arrow in arrows)
         if has_lone_pair_source and not _visible_lone_pair_entries(panel, display):
             warnings.append(f"{panel_label}: arrows are present but no lone-pair dots are shown.")
-        if arrows and not (panel.get("charges") or panel.get("partial_charges")):
-            warnings.append(f"{panel_label}: arrows are present but no formal/partial charge annotations are shown.")
-    transition_checks = _state_transition_checks(panels)
-    warnings.extend(transition_checks["warnings"])
+        if not display.get("show_formal_charges", True) and any(_panel_charge_by_map(panel).values()):
+            blocking_issues.append(f"{panel_label}: formal charges in the structures are hidden by display settings.")
+    semantic_checks = validate_semantics(spec)
+    blocking_issues.extend(semantic_checks["errors"])
+    warnings.extend(semantic_checks["unsupported"])
+    if spec_version == "2.1" and semantic_checks["status"] != "valid":
+        blocking_issues.append("MechanismSpec 2.1 requires complete, supported, consistent electron bookkeeping.")
+    # Only compare resolved chemical states; a panel may contain BOTH sides.
+    transition_checks = {"checks": semantic_checks["steps"]}
     return {
         "publication_ready": False,
         "ready_for_human_review": not blocking_issues,
@@ -1686,6 +1727,7 @@ def validate_mechanism_spec(spec: dict[str, Any]) -> dict[str, Any]:
         "arrow_checks": checks,
         "graph_edit_checks": graph_edit_checks,
         "state_transition_checks": transition_checks["checks"],
+        "semantic_checks": semantic_checks,
     }
 
 
@@ -1926,6 +1968,11 @@ def _render_panel(
                     color=color,
                     avoid_positions=annotation_avoid_positions,
                 )
+            for radical in range(atom.GetNumRadicalElectrons()):
+                # Radical population comes from the molecule, never free text.
+                rx = max((b[2] for b in label_boxes), default=ax + 7) + 4 + radical * 5
+                ry = ay - 9
+                parts.append(f"<circle class='radical-electron' data-atom-map='{atom_map}' cx='{rx:.1f}' cy='{ry:.1f}' r='1.7' fill='{color}'/>")
             if show_atom_maps and atom_map:
                 parts.append(f"<text class='map' x='{ax + 9:.1f}' y='{ay + 17:.1f}'>{atom_map}</text>")
             if atom_group_open:
@@ -2091,11 +2138,12 @@ def _render_panel(
 
 def mechanism_spec_example() -> dict[str, Any]:
     return {
-        "spec_version": "2.0",
+        "spec_version": "2.1",
         "title": "SN2 mechanism",
         "journal_style": "acs",
         "presentation_mode": "publication",
         "layout": {
+            "renderer": "compact",
             "columns": 1,
             "panel_width": 760,
             "panel_height": 188,
@@ -2212,6 +2260,10 @@ def _molecule_state(mol_spec: dict[str, Any], mol_index: int) -> dict[str, Any]:
                 "atom_map": atom.GetAtomMapNum() or None,
                 "symbol": atom.GetSymbol(),
                 "formal_charge": atom.GetFormalCharge(),
+                "isotope": atom.GetIsotope(),
+                "radical_electrons": atom.GetNumRadicalElectrons(),
+                "chiral_tag": str(atom.GetChiralTag()),
+                "cip_label": atom.GetProp("_CIPCode") if atom.HasProp("_CIPCode") else None,
                 "explicit_valence": atom.GetExplicitValence(),
                 "total_hydrogens": atom.GetTotalNumHs(),
             }
@@ -2219,7 +2271,7 @@ def _molecule_state(mol_spec: dict[str, Any], mol_index: int) -> dict[str, Any]:
     for bond in mol.GetBonds():
         begin = bond.GetBeginAtom().GetAtomMapNum() or bond.GetBeginAtomIdx()
         end = bond.GetEndAtom().GetAtomMapNum() or bond.GetEndAtomIdx()
-        bonds.append({"atom_maps": [int(begin), int(end)], "order": str(bond.GetBondType())})
+        bonds.append({"atom_maps": [int(begin), int(end)], "order": str(bond.GetBondType()), "stereo": str(bond.GetStereo())})
     state.update(
         {
             "atom_maps": sorted(atom["atom_map"] for atom in atoms if atom["atom_map"]),
@@ -2335,7 +2387,13 @@ def _trace_state(
     resolved_panel: dict[str, Any] | None = None,
     resolved_index: int | None = None,
 ) -> dict[str, Any]:
-    resolved = _panel_state(resolved_panel or panel, resolved_index or panel_index)
+    owner = resolved_panel if resolved_panel is not None else panel
+    indices = state_selection(owner, "starting_state" if resolved_panel is not None else key)
+    resolved = _panel_state(owner, resolved_index or panel_index)
+    if indices is not None:
+        resolved["molecules"] = [m for m in resolved["molecules"] if m["molecule_index"] in indices]
+        resolved["formal_charge"] = sum(m.get("formal_charge", 0) for m in resolved["molecules"])
+        resolved["atom_maps"] = sorted({n for m in resolved["molecules"] for n in m.get("atom_maps", [])})
     declared = panel.get(key)
     if declared:
         return {"declared": declared, "resolved_state": resolved}
@@ -2347,6 +2405,13 @@ def build_mechanism_trace(spec: dict[str, Any], validation: dict[str, Any]) -> d
     steps = []
     for panel_index, panel in enumerate(panels, start=1):
         next_panel = panels[panel_index] if panel_index < len(panels) else None
+        try:
+            start_entries, end_entries = resolve_states(panel, next_panel)
+            before = {"molecules": [m for _, m in start_entries]}
+            after = {"molecules": [m for _, m in end_entries]} if end_entries is not None else None
+        except (ValueError, TypeError, KeyError, IndexError):
+            before, after = {"molecules": []}, None
+        same_panel_end = state_selection(panel, "expected_state") is not None
         panel_checks = [check for check in validation.get("arrow_checks", []) if check.get("panel") == panel_index]
         steps.append(
             {
@@ -2355,15 +2420,16 @@ def build_mechanism_trace(spec: dict[str, Any], validation: dict[str, Any]) -> d
                 "starting_state": _trace_state(panel, panel_index, "starting_state"),
                 "electron_moves": _electron_moves(panel),
                 "graph_edits": panel.get("graph_edits", []),
-                "bond_changes": panel.get("bond_changes") or _inferred_bond_changes(panel, next_panel),
-                "charge_changes": panel.get("charge_changes") or _inferred_charge_changes(panel, next_panel),
+                "bond_changes": _inferred_bond_changes(before, after),
+                "charge_changes": _inferred_charge_changes(before, after),
                 "expected_state": _trace_state(
                     panel,
                     panel_index,
                     "expected_state",
-                    resolved_panel=next_panel or panel,
-                    resolved_index=panel_index + 1 if next_panel else panel_index,
-                ),
+                    resolved_panel=None if same_panel_end else next_panel,
+                    resolved_index=panel_index + 1 if not same_panel_end and next_panel else panel_index,
+                ) if after is not None else {"status": "not_supplied"},
+                "semantic_validation": next((s for s in validation.get("semantic_checks", {}).get("steps", []) if s["panel"] == panel_index), {"status": "not_checked"}),
                 "proton_counterion_handling": {
                     "proton_transfers": panel.get("proton_transfers", []),
                     "counterions": panel.get("counterions", []),
@@ -2378,10 +2444,12 @@ def build_mechanism_trace(spec: dict[str, Any], validation: dict[str, Any]) -> d
     return {
         "schema": "codex.mechanism_trace.v1",
         "source_spec_version": str(spec.get("spec_version", "1.0")),
+        "source_spec_sha256": hashlib.sha256(json.dumps(spec, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(),
         "summary": {
             "step_count": len(steps),
             "ready_for_human_review": validation.get("ready_for_human_review", False),
             "publication_ready": validation.get("publication_ready", False),
+            "semantic_status": validation.get("semantic_checks", {}).get("status", "not_checked"),
         },
         "steps": steps,
         "global_validation": {
@@ -2427,7 +2495,7 @@ def _cdxml_anchor_id(
     return None
 
 
-def render_cdxml_document(spec: dict[str, Any], warnings: list[str]) -> str:
+def render_cdxml_document(spec: dict[str, Any], warnings: list[str], *, scene_entries: list | None = None) -> str:
     """Render a ChemDraw-like CDXML document with real graph/vector objects.
 
     The CDXML stays intentionally conservative, but it now writes fragments,
@@ -2457,7 +2525,7 @@ def render_cdxml_document(spec: dict[str, Any], warnings: list[str]) -> str:
         col = (panel_index - 1) % columns
         box = (col * panel_w, top_margin + row * panel_h, panel_w, panel_h)
         panel_warnings: list[str] = []
-        entries = _layout_panel_molecules(panel, panel_index, box, panel_warnings, style, alignment_by_map)
+        entries = scene_entries[panel_index - 1] if scene_entries is not None else _layout_panel_molecules(panel, panel_index, box, panel_warnings, style, alignment_by_map)
         for atom_map, relative in _relative_map_positions(entries, box).items():
             alignment_by_map.setdefault(atom_map, relative)
         panel_atom_ids: dict[tuple[int, int], str] = {}
@@ -2570,7 +2638,7 @@ def render_cdxml_document(spec: dict[str, Any], warnings: list[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_chemdoodle_json(spec: dict[str, Any]) -> dict[str, Any]:
+def render_chemdoodle_json(spec: dict[str, Any], *, scene_entries: list | None = None) -> dict[str, Any]:
     style = _style_for_spec(spec)
     display = _display_options(spec)
     panels = spec.get("panels", [])
@@ -2587,7 +2655,7 @@ def render_chemdoodle_json(spec: dict[str, Any]) -> dict[str, Any]:
         row = (panel_index - 1) // columns
         col = (panel_index - 1) % columns
         box = (col * panel_w, top_margin + row * panel_h, panel_w, panel_h)
-        entries = _layout_panel_molecules(panel, panel_index, box, [], style, alignment_by_map)
+        entries = scene_entries[panel_index - 1] if scene_entries is not None else _layout_panel_molecules(panel, panel_index, box, [], style, alignment_by_map)
         for atom_map, relative in _relative_map_positions(entries, box).items():
             alignment_by_map.setdefault(atom_map, relative)
         atom_ids_by_map: dict[tuple[int, int], str] = {}
@@ -2626,6 +2694,8 @@ def render_chemdoodle_json(spec: dict[str, Any]) -> dict[str, Any]:
                     atom_payload["h"] = int(h_count)
                 if atom.GetFormalCharge():
                     atom_payload["c"] = atom.GetFormalCharge()
+                if atom.GetNumRadicalElectrons():
+                    atom_payload["r"] = atom.GetNumRadicalElectrons()
                 if atom_map:
                     atom_payload["map"] = int(atom_map)
                     if int(atom_map) in lone_pair_counts:
@@ -2925,11 +2995,7 @@ def _arrow_route_warnings(svg: str) -> list[str]:
     ]
 
 
-def render_mechanism_canvas(spec: dict[str, Any], output_dir: str | None = None) -> dict[str, Any]:
-    warnings: list[str] = []
-    validation = validate_mechanism_spec(spec)
-    warnings.extend(validation["warnings"])
-    style = _style_for_spec(spec)
+def _legacy_mechanism_artwork(spec: dict, style: dict, warnings: list) -> tuple[str, dict]:
     layout = spec.get("layout", {})
     display = _display_options(spec)
     panels = spec.get("panels", [])
@@ -3013,17 +3079,41 @@ def render_mechanism_canvas(spec: dict[str, Any], output_dir: str | None = None)
         elements=audit_elements,
         target_bond_px=float(style["max_bond_px"]) * 1.5,
     )
+    return svg, figure_checks
+
+
+def render_mechanism_canvas(spec: dict[str, Any], output_dir: str | None = None) -> dict[str, Any]:
+    warnings: list[str] = []
+    validation = validate_mechanism_spec(spec)
+    warnings.extend(validation["warnings"])
+    style = _style_for_spec(spec)
+    scene = None
+    if spec.get("layout", {}).get("renderer") == "legacy":
+        svg, figure_checks = _legacy_mechanism_artwork(spec, style, warnings)
+    else:
+        from .mechanism_scene import compose_mechanism
+
+        scene = compose_mechanism(spec, _display_options(spec))
+        svg, figure_checks = scene["svg"], scene["figure_audit"]
+        style = {**style, "name": scene["preset"]}
     validation = {
         **validation,
         "figure_audit": figure_checks,
         "blocking_issues": [*validation["blocking_issues"], *figure_checks["blocking_issues"]],
         "warnings": [*validation["warnings"], *figure_checks["warnings"]],
     }
+    validation["ready_for_human_review"] = not validation["blocking_issues"]
     warnings.extend(figure_checks["warnings"])
-    cdxml = render_cdxml_document(spec, warnings)
-    chemdoodle_json = render_chemdoodle_json(spec)
+    scene_entries = scene["entries"] if scene else None
+    cdxml = render_cdxml_document(spec, warnings, scene_entries=scene_entries)
+    chemdoodle_json = render_chemdoodle_json(spec, scene_entries=scene_entries)
+    if scene:
+        chemdoodle_json["metadata"]["canvas"] = {"width": scene["width"], "height": scene["height"]}
     chemdoodle_html = render_chemdoodle_html(spec, chemdoodle_json)
     mechanism_trace = build_mechanism_trace(spec, validation)
+    # SVG and JSON travel together, including if only the SVG is shared.
+    metadata = {"schema": "codex.mechanism_bundle.v1", "spec": spec, "trace": mechanism_trace}
+    svg = svg.replace("</svg>", "<metadata id='codex-mechanism'>" + escape(json.dumps(metadata, ensure_ascii=False)) + "</metadata>\n</svg>")
     ketcher_adapter = build_ketcher_adapter_payload(spec)
     marvin_adapter = build_marvin_adapter_payload(spec)
     status = "ok"
@@ -3047,6 +3137,7 @@ def render_mechanism_canvas(spec: dict[str, Any], output_dir: str | None = None)
         "mechanism_trace": mechanism_trace,
         "mechanism_trace_json": json.dumps(mechanism_trace, ensure_ascii=False, indent=2),
         "publication_checks": validation,
+        "semantic_checks": validation["semantic_checks"],
         "warnings": warnings,
         "requirements": [
             "Every chemically meaningful arrow should be anchored to atom_map or bond atom-map pairs.",
@@ -3083,7 +3174,7 @@ def render_mechanism_canvas(spec: dict[str, Any], output_dir: str | None = None)
         from .figure_audit import raster_ink_check, svg_to_png
 
         png_path = path / "mechanism.png"
-        png_warnings = svg_to_png(svg_path, png_path)
+        png_warnings = svg_to_png(svg_path, png_path, scale=2.0 if scene else 1.0)
         if png_path.exists() and not png_warnings:
             ink_warnings, ink_summary = raster_ink_check(png_path)
             warnings.extend(ink_warnings)

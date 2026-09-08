@@ -105,7 +105,7 @@ def test_route_figure_audit_blocks_forced_undersized_canvas():
 def test_mechanism_render_includes_figure_audit():
     result = chem_mechanism_render(chem_mechanism_spec_example())
     audit = result["publication_checks"]["figure_audit"]
-    assert audit["renderer"] == "codex_mechanism_canvas"
+    assert audit["renderer"] == "rdkit_compact_mechanism"
     per_element = audit["bond_geometry"]["per_element"]
     assert per_element
     medians = [entry["median_bond_px"] for entry in per_element]

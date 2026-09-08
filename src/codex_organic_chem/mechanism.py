@@ -161,10 +161,9 @@ def _mechanism_svg(reaction_smiles: str, steps: list[MechanismStep], step_index:
         return None
     selected_steps = [steps[step_index]] if step_index is not None else steps[:3]
     label = "; ".join(step.elementary_step for step in selected_steps)
-    arrow_y = 52 + (24 * (step_index or 0))
+    # A reaction preview has no mapped intermediate/electron anchors. Never
+    # imply that a decorative curve is a mechanistic electron-flow arrow.
     overlay = (
-        f'<path d="M 130 {arrow_y} C 290 10, 470 10, 650 {arrow_y}" '
-        'stroke="#d62728" stroke-width="4" fill="none" marker-end="url(#arrowhead)"/>'
         f'<text x="28" y="292" font-size="16" font-family="Arial, Helvetica, sans-serif" fill="#222">{escape(label)}</text>'
     )
     defs = (
@@ -272,11 +271,12 @@ def draft_mechanism(
         "reaction": analysis.to_dict(),
         "style": style,
         "quality": quality,
+        "rendered_svg_kind": "reaction_preview_not_mechanism",
         "steps": [step.to_dict() for step in steps],
         "step_explanations": [_explanation_for_step(step, index) for index, step in enumerate(steps, start=1)],
         "warnings": [
             "Mechanism steps are rule-based hypotheses and need expert/literature validation.",
-            "Electron-flow arrows are publication-vector SVG assets but schematic unless atom-exact endpoints/literature support are supplied.",
+            "The rendered SVG is a reaction preview, without mechanistic electron arrows. Supply explicit mapped steps to chem_mechanism_render.",
             *analysis.warnings,
         ],
         "evidence_boundary": {

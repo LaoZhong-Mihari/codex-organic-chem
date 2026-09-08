@@ -97,6 +97,7 @@ class MoleculeDepiction:
     bond_lengths_px: list[float] = field(default_factory=list)
     atom_points: list[tuple[float, float]] = field(default_factory=list)
     label_boxes: list[tuple[float, float, float, float]] = field(default_factory=list)
+    atom_label_boxes: dict[int, list[tuple[float, float, float, float]]] = field(default_factory=dict)
     ink_box: tuple[float, float, float, float] | None = None
     warnings: list[str] = field(default_factory=list)
 
@@ -156,12 +157,14 @@ def _strip_to_body(svg: str) -> str:
     return body
 
 
-def prepare_mol(smiles: str | None = None, molfile: str | None = None) -> Any:
+def prepare_mol(smiles: str | None = None, molfile: str | None = None, *, molecule: Any = None) -> Any:
     """Build a depiction-ready mol with 2D coordinates, or raise ValueError."""
     if not RDKIT_AVAILABLE:
         raise ValueError("RDKit is unavailable; molecule depiction requires RDKit.")
-    mol = None
-    if molfile:
+    mol = Chem.Mol(molecule) if molecule is not None else None
+    if mol is not None:
+        pass  # Keep mapped explicit H and any supplied 2D conformer.
+    elif molfile:
         mol = Chem.MolFromMolBlock(molfile, sanitize=True, removeHs=False)
     elif smiles:
         mol = Chem.MolFromSmiles(smiles)
@@ -309,6 +312,10 @@ def _trim_to_ink(depiction: MoleculeDepiction, padding: float) -> MoleculeDepict
         bond_lengths_px=depiction.bond_lengths_px,
         atom_points=[(x - dx, y - dy) for x, y in depiction.atom_points],
         label_boxes=[(a - dx, b - dy, c - dx, d - dy) for a, b, c, d in depiction.label_boxes],
+        atom_label_boxes={
+            idx: [(a - dx, b - dy, c - dx, d - dy) for a, b, c, d in boxes]
+            for idx, boxes in depiction.atom_label_boxes.items()
+        },
         ink_box=(x0 - dx, y0 - dy, x1 - dx, y1 - dy),
         warnings=depiction.warnings,
     )
@@ -332,6 +339,7 @@ def _draw_at_size(
     options.centreMoleculesBeforeDrawing = True
     options.clearBackground = False
     options.scaleBondWidth = False
+    options.explicitMethyl = bool(resolved.get("explicit_methyl", False))
     if resolved.get("monochrome", True):
         options.useBWAtomPalette()
     Draw.rdMolDraw2D.PrepareAndDrawMolecule(
@@ -350,6 +358,12 @@ def _draw_at_size(
 
     bond_lengths = _bond_lengths_from_atoms(mol, atom_points)
     label_boxes = _label_boxes_from_svg(svg)
+    atom_label_boxes: dict[int, list[tuple[float, float, float, float]]] = {}
+    for atom_index, path_data in re.findall(r"<path\s+class='atom-(\d+)'\s+d='([^']*)'", svg):
+        numbers = [float(value) for value in _NUMBER.findall(path_data)]
+        xs, ys = numbers[0::2], numbers[1::2]
+        if xs and ys:
+            atom_label_boxes.setdefault(int(atom_index), []).append((min(xs), min(ys), max(xs), max(ys)))
     warnings: list[str] = []
 
     ink_box: tuple[float, float, float, float] | None = None
@@ -376,6 +390,7 @@ def _draw_at_size(
         bond_lengths_px=bond_lengths,
         atom_points=atom_points,
         label_boxes=label_boxes,
+        atom_label_boxes=atom_label_boxes,
         ink_box=ink_box,
         warnings=warnings,
     )

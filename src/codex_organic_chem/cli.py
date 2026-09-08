@@ -15,6 +15,7 @@ from .service import (
     chem_mechanism_draft,
     chem_mechanism_render,
     chem_mechanism_spec_example,
+    chem_mechanism_validate,
     chem_normalize_structure,
     chem_ocsr_benchmark,
     chem_parse_image,
@@ -109,6 +110,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--spec", help="Path to mechanism spec JSON. Omit with --example to print an example spec.")
     p.add_argument("--output-dir")
     p.add_argument("--example", action="store_true")
+
+    p = sub.add_parser("mechanism-validate", help="Check mapped states, electron moves, and graph edits without rendering")
+    p.add_argument("--spec", required=True)
 
     p = sub.add_parser("route-figure", help="Render a publication-style route/scheme figure from a JSON spec")
     p.add_argument("--spec", help="Path to route figure spec JSON. Omit with --example to print an example spec.")
@@ -225,6 +229,9 @@ def main(argv: list[str] | None = None) -> None:
             quality=args.quality,
             structure_confirmed=args.confirmed,
         )
+    elif args.command == "mechanism-validate":
+        with open(args.spec, encoding="utf-8") as handle:
+            payload = chem_mechanism_validate(json.load(handle))
     elif args.command == "mechanism-render":
         if args.example:
             payload = chem_mechanism_spec_example()

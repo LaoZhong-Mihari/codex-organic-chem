@@ -1,0 +1,106 @@
+{
+  "spec_version": "2.1",
+  "title": "Chlorine homolysis",
+  "journal_style": "acs",
+  "presentation_mode": "publication",
+  "layout": {
+    "columns": 1,
+    "panel_width": 1200,
+    "panel_height": 232,
+    "top_margin": 10,
+    "bottom_margin": 10,
+    "show_panel_titles": true,
+    "show_atom_maps": false,
+    "align_atom_maps": false,
+    "show_footer": false
+  },
+  "evidence": [
+    "GPT-6-authored educational fixture for software validation; not an experimental finding."
+  ],
+  "uncertainty": "Initiation energy/light is assumed, not calculated. Only paired homolysis is supported by the radical replay checker.",
+  "panels": [
+    {
+      "title": "Homolysis: two electrons, two fishhooks",
+      "molecules": [
+        {
+          "smiles": "[Cl:1][Cl:2]",
+          "side": "reactant",
+          "show_carbons": true
+        },
+        {
+          "smiles": "[Cl:1]",
+          "side": "product",
+          "show_carbons": true
+        },
+        {
+          "smiles": "[Cl:2]",
+          "side": "product",
+          "show_carbons": true
+        }
+      ],
+      "starting_state": {
+        "molecule_indices": [
+          1
+        ]
+      },
+      "expected_state": {
+        "molecule_indices": [
+          2,
+          3
+        ]
+      },
+      "reaction_arrow_after": 1,
+      "molecule_y_offset": 48,
+      "molecule_height_fraction": 0.6,
+      "operator_y_offset": 116,
+      "arrows": [
+        {
+          "from_bond": [
+            1,
+            2
+          ],
+          "to_atom_map": 1,
+          "from_molecule_index": 1,
+          "to_molecule_index": 1,
+          "kind": "single_electron",
+          "electron_count": 1,
+          "curvature": -28
+        },
+        {
+          "from_bond": [
+            1,
+            2
+          ],
+          "to_atom_map": 2,
+          "from_molecule_index": 1,
+          "to_molecule_index": 1,
+          "kind": "single_electron",
+          "electron_count": 1,
+          "curvature": 28
+        }
+      ],
+      "graph_edits": [
+        {
+          "type": "break_bond",
+          "atom_maps": [
+            1,
+            2
+          ]
+        },
+        {
+          "type": "radical",
+          "atom_map": 1,
+          "from": 0,
+          "to": 1
+        },
+        {
+          "type": "radical",
+          "atom_map": 2,
+          "from": 0,
+          "to": 1
+        }
+      ],
+      "lone_pairs": []
+    }
+  ]
+}

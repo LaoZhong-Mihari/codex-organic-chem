@@ -144,13 +144,13 @@ def _label_collision_checks(elements: list[FigureElement]) -> list[str]:
     return warnings
 
 
-def svg_to_png(svg_path: Path, png_path: Path) -> list[str]:
+def svg_to_png(svg_path: Path, png_path: Path, *, scale: float = 1.0) -> list[str]:
     """Rasterize an SVG with whichever converter is installed."""
     commands = [
-        ["rsvg-convert", "-o", str(png_path), str(svg_path)],
-        ["magick", str(svg_path), str(png_path)],
-        ["convert", str(svg_path), str(png_path)],
-        ["inkscape", str(svg_path), "--export-type=png", f"--export-filename={png_path}"],
+        ["rsvg-convert", "-z", str(scale), "-o", str(png_path), str(svg_path)],
+        ["magick", "-density", str(96 * scale), str(svg_path), str(png_path)],
+        ["convert", "-density", str(96 * scale), str(svg_path), str(png_path)],
+        ["inkscape", str(svg_path), "--export-type=png", f"--export-dpi={96 * scale}", f"--export-filename={png_path}"],
     ]
     chrome = _chrome_path()
     if chrome:
@@ -163,6 +163,7 @@ def svg_to_png(svg_path: Path, png_path: Path) -> list[str]:
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--hide-scrollbars",
+                f"--force-device-scale-factor={scale}",
                 "--default-background-color=FFFFFFFF",
                 f"--window-size={width},{height}",
                 f"--screenshot={png_path}",
