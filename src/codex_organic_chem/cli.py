@@ -7,20 +7,29 @@ import sys
 from .external import tool_statuses
 from .service import (
     COMPUTE_TASKS,
+    ENUMERATE_TASKS,
+    chem_compare_structures,
     chem_compute,
     chem_draw,
+    chem_enumerate,
     chem_figure_tool_status,
     chem_input_review,
+    chem_review_demo,
+    chem_review_mode,
+    chem_route_review,
     chem_literature_search,
     chem_mechanism_draft,
     chem_mechanism_render,
     chem_mechanism_spec_example,
     chem_mechanism_validate,
+    chem_model_kit,
     chem_normalize_structure,
     chem_ocsr_benchmark,
     chem_parse_image,
     chem_parse_scheme,
     chem_reaction_analyze,
+    chem_route_check,
+    chem_route_check_example,
     chem_route_figure,
     chem_route_figure_spec_example,
     chem_synthesis_suggest,
@@ -28,6 +37,7 @@ from .service import (
     chem_structure_review_result,
     chem_tool_doctor,
 )
+from .model_kit import TASKS as MODEL_KIT_TASKS
 from .scheme_ocsr import benchmark_to_tsv
 from .utils import json_dumps
 
@@ -55,26 +65,50 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--gold-map", help="Optional JSON/TSV compound-to-placeholder definitions")
     p.add_argument("--out", choices=["json"], default="json", help="Output format")
 
-    p = sub.add_parser("input-review", help="Render recognized input and optionally wait for editor confirmation")
+    def review_options(parser: argparse.ArgumentParser, lifetime: int = 1800) -> None:
+        parser.add_argument("--wait", action="store_true", help="Block until the user finishes the review, for at most --wait-s")
+        parser.add_argument("--wait-s", type=int, default=540, help="Longest time --wait blocks; the session stays open after it")
+        parser.add_argument("--timeout-s", type=int, default=lifetime, help="How long the review session stays open, in seconds")
+        parser.add_argument("--yes", action="store_true", help="The user asked for the page or agreed to it (needed when review mode is ask or off)")
+        parser.add_argument("--lang", choices=["en", "zh"], help="Page language (default: the browser's)")
+
+    p = sub.add_parser("input-review", help="Open the review page on one structure, reaction or image and return a session")
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument("--smiles")
     group.add_argument("--reaction-smiles")
     group.add_argument("--molfile")
     group.add_argument("--image-path")
     p.add_argument("--kind", choices=["auto", "molecule", "reaction"], default="auto")
-    p.add_argument("--wait", action="store_true", help="Keep the local review editor live and wait for completion")
-    p.add_argument("--timeout-s", type=int, default=1800, help="Review session timeout in seconds")
+    p.add_argument("--source-image", help="With --smiles: the image the structure was read from, shown beside it")
+    p.add_argument("--note", help="How the structure was read and what was assumed; shown to the reviewer")
+    p.add_argument("--static", action="store_true", help="Only return the rendered preview; do not open a review page")
+    review_options(p)
 
-    p = sub.add_parser("review-batch", help="Start a local Ketcher batch review session for molecule SMILES")
-    p.add_argument("--input", required=True, help="JSON file containing a list of review items or an object with an items list")
-    p.add_argument("--wait", action="store_true", help="Wait until the browser review session completes or times out")
-    p.add_argument("--timeout-s", type=int, default=1800, help="Review session timeout in seconds")
+    p = sub.add_parser("review-batch", help="Open the review page on several structures (source crops, notes, alternatives)")
+    p.add_argument("--input", required=True, help="JSON: a list of items, or {items, title, intro, images, language}")
+    p.add_argument("--title")
+    p.add_argument("--intro", help="One or two sentences telling the reviewer what to look at")
+    p.add_argument("--image", action="append", help="Whole source page shown above the queue (repeatable)")
+    review_options(p)
 
-    p = sub.add_parser("review-result", help="Fetch or wait for a local Ketcher review session result")
+    p = sub.add_parser("route-review", help="Open the review page on a route: audit per step, editable structures and conditions")
+    p.add_argument("--route", required=True, help="Route JSON (same format as route-check)")
+    p.add_argument("--intro", help="One or two sentences telling the reviewer what to look at")
+    p.add_argument("--image", action="append", help="Source image the target was read from, shown beside it (repeatable)")
+    review_options(p, lifetime=3600)
+
+    p = sub.add_parser("review-result", help="Fetch, or with --wait block for, the result of a review session")
     p.add_argument("--session-id", required=True)
     p.add_argument("--review-token")
     p.add_argument("--wait", action="store_true")
-    p.add_argument("--timeout-s", type=int, default=1800)
+    p.add_argument("--timeout-s", type=int, default=540, help="How long to wait; a timeout leaves the session open")
+
+    p = sub.add_parser("review-mode", help="Show or set when the review page opens: auto, ask or off")
+    p.add_argument("mode", nargs="?", choices=["auto", "ask", "off"])
+
+    p = sub.add_parser("review-demo", help="Open two practice review pages with planted mistakes")
+    p.add_argument("--lang", choices=["en", "zh"], default="en")
+    p.add_argument("--which", choices=["both", "structures", "route"], default="both")
 
     p = sub.add_parser("normalize", help="Normalize SMILES or Molfile into a MoleculeRecord")
     group = p.add_mutually_exclusive_group(required=True)
@@ -121,9 +155,38 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--format", action="append", choices=["svg", "png"], dest="formats")
     p.add_argument("--example", action="store_true")
 
+    p = sub.add_parser("route-check", help="Audit a route step by step: atoms, stereocentres, groups, target identity")
+    p.add_argument("--route", help="Path to route JSON. Omit with --example to print the format.")
+    p.add_argument("--figure-dir", help="Also draw every numbered compound as a scheme into this directory")
+    p.add_argument("--mcs-timeout", type=int, default=6, help="Seconds allowed per atom-mapping search")
+    p.add_argument("--example", action="store_true")
+    p.add_argument("--issues-only", action="store_true", help="Print status and issues without per-step detail")
+
+    p = sub.add_parser("compare", help="Relationship between two structures (or stereo audit of one)")
+    p.add_argument("--a", required=True, help="SMILES")
+    p.add_argument("--b", help="SMILES; omit for a stereo audit of --a")
+
+    p = sub.add_parser("enumerate", help="Count stereoisomers, substitution products, NMR environments or groups")
+    p.add_argument("--smiles", required=True)
+    p.add_argument("--task", choices=list(ENUMERATE_TASKS), default="stereoisomers")
+    p.add_argument("--substituent", default="Cl")
+    p.add_argument("--n", type=int, default=1, dest="n_substitutions", choices=[1, 2])
+
+    p = sub.add_parser("model-kit", help="3D questions: cis/trans on a ring, face accessibility, reach, dihedral, planarity, feasibility, isomer energies")
+    p.add_argument("--task", choices=list(MODEL_KIT_TASKS), required=True)
+    p.add_argument("--smiles", required=True, action="append", help="Repeat for isomer_energies")
+    p.add_argument("--atoms", help="Comma-separated atom indices (SMILES order) or map numbers with --by-map")
+    p.add_argument("--by-map", action="store_true")
+    p.add_argument("--method", choices=["mmff", "xtb"], default="mmff")
+    p.add_argument("--solvent")
+    p.add_argument("--threshold", type=float, default=4.0)
+    p.add_argument("--refine", choices=["auto", "xtb", "none"], default="auto")
+
     p = sub.add_parser("literature-search", help="Search literature metadata for chemistry evidence")
     p.add_argument("--query", required=True)
     p.add_argument("--rows", type=int, default=5)
+    p.add_argument("--source", choices=["auto", "openalex", "crossref"], default="auto")
+    p.add_argument("--year-from", type=int)
 
     p = sub.add_parser("synthesis-suggest", help="Suggest exactly one layer of retrosynthetic options with tool/literature evidence")
     p.add_argument("--target-smiles", required=True)
@@ -134,6 +197,29 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--literature-rows", type=int, default=4)
 
     return parser
+
+
+def _follow_review(payload: dict, args: argparse.Namespace) -> dict:
+    """Announce an opened review page and, with --wait, block for its result.
+
+    The page is served by the detached review server, so it stays up after
+    this command returns; `review-result --session-id ... --wait` collects it.
+    """
+    if not payload.get("session_id"):
+        return payload
+    sys.stderr.write(f"Review URL: {payload['review_url']}\n")
+    sys.stderr.flush()
+    collect = f"codex-chem review-result --session-id {payload['session_id']} --wait"
+    if args.wait:
+        result = chem_structure_review_result(
+            session_id=payload["session_id"], wait=True, timeout_s=min(args.wait_s, args.timeout_s)
+        )
+        result["browser_opened"] = payload.get("browser_opened", False)
+        if result.get("wait_timed_out"):
+            result["collect_with"] = collect
+        return result
+    payload["collect_with"] = f"codex-chem review-result --session-id {payload['session_id']} --wait"
+    return payload
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -161,47 +247,63 @@ def main(argv: list[str] | None = None) -> None:
             molfile=args.molfile,
             image_path=args.image_path,
             kind=args.kind,
-            interactive=args.wait,
+            interactive=not args.static,
             timeout_s=args.timeout_s,
+            confirmed=args.yes,
+            detached=True,
+            language=args.lang,
+            note=args.note,
+            source_image=args.source_image,
         )
-        if args.wait and payload.get("session_id"):
-            sys.stderr.write(f"Review URL: {payload['review_url']}\n")
-            sys.stderr.flush()
-            payload = chem_structure_review_result(
-                session_id=payload["session_id"],
-                review_token=payload.get("review_token"),
-                wait=True,
-                timeout_s=args.timeout_s,
-            )
-        elif not args.wait and payload.get("status") != "error":
-            payload.setdefault("warnings", []).append(
-                "Static preview only: use --wait to keep the local review editor live until confirmation."
-            )
+        payload = _follow_review(payload, args)
     elif args.command == "review-batch":
         with open(args.input, encoding="utf-8") as handle:
             review_payload = json.load(handle)
-        items = review_payload.get("items") if isinstance(review_payload, dict) else review_payload
-        payload = chem_structure_review_batch(items=items, wait=False, timeout_s=args.timeout_s)
-        if args.wait:
-            sys.stderr.write(f"Review URL: {payload['review_url']}\n")
-            sys.stderr.flush()
+        options = review_payload if isinstance(review_payload, dict) else {}
+        items = options.get("items") if isinstance(review_payload, dict) else review_payload
+        payload = chem_structure_review_batch(
+            items=items,
+            wait=False,
+            timeout_s=args.timeout_s,
+            title=args.title or options.get("title"),
+            intro=args.intro or options.get("intro"),
+            language=args.lang or options.get("language"),
+            images=args.image or options.get("images"),
+            confirmed=args.yes,
+            detached=True,
+        )
+        payload = _follow_review(payload, args)
+    elif args.command == "route-review":
+        with open(args.route, encoding="utf-8") as handle:
+            route_payload = json.load(handle)
+        payload = chem_route_review(
+            route=route_payload,
+            wait=False,
+            timeout_s=args.timeout_s,
+            intro=args.intro,
+            language=args.lang,
+            confirmed=args.yes,
+            detached=True,
+            images=args.image,
+        )
+        payload = _follow_review(payload, args)
+    elif args.command == "review-result":
+        try:
             payload = chem_structure_review_result(
-                session_id=payload["session_id"],
-                review_token=payload.get("review_token"),
-                wait=True,
+                session_id=args.session_id,
+                review_token=args.review_token,
+                wait=args.wait,
                 timeout_s=args.timeout_s,
             )
-        else:
-            payload.setdefault("warnings", []).append(
-                "CLI review server exits with this command; use --wait or call through the long-running MCP server."
-            )
-    elif args.command == "review-result":
-        payload = chem_structure_review_result(
-            session_id=args.session_id,
-            review_token=args.review_token,
-            wait=args.wait,
-            timeout_s=args.timeout_s,
-        )
+        except KeyError:
+            payload = {"status": "error", "warnings": [f"Unknown review session: {args.session_id}"]}
+    elif args.command == "review-mode":
+        payload = chem_review_mode(args.mode)
+    elif args.command == "review-demo":
+        payload = chem_review_demo(language=args.lang, which=args.which)
+        for name, session in payload.get("sessions", {}).items():
+            sys.stderr.write(f"Review URL ({name}): {session['review_url']}\n")
+        sys.stderr.flush()
     elif args.command == "normalize":
         payload = chem_normalize_structure(smiles=args.smiles, molfile=args.molfile)
     elif args.command == "draw":
@@ -255,8 +357,38 @@ def main(argv: list[str] | None = None) -> None:
                 basename=args.basename,
                 formats=args.formats,
             )
+    elif args.command == "route-check":
+        if args.example:
+            payload = chem_route_check_example()
+        elif not args.route:
+            payload = {"status": "error", "warnings": ["Provide --route path or use --example."]}
+        else:
+            with open(args.route, encoding="utf-8") as handle:
+                payload = chem_route_check(
+                    json.load(handle), figure_output_dir=args.figure_dir, mcs_timeout_s=args.mcs_timeout
+                )
+            if args.issues_only:
+                payload = {k: v for k, v in payload.items() if k != "steps"}
+    elif args.command == "compare":
+        payload = chem_compare_structures(args.a, args.b)
+    elif args.command == "enumerate":
+        payload = chem_enumerate(
+            args.smiles, task=args.task, substituent=args.substituent, n_substitutions=args.n_substitutions
+        )
+    elif args.command == "model-kit":
+        atoms = [int(x) for x in args.atoms.split(",")] if args.atoms else None
+        payload = chem_model_kit(
+            args.task,
+            args.smiles if args.task == "isomer_energies" else args.smiles[0],
+            atoms=atoms,
+            by_map=args.by_map,
+            method=args.method,
+            solvent=args.solvent,
+            threshold=args.threshold,
+            refine=args.refine,
+        )
     elif args.command == "literature-search":
-        payload = chem_literature_search(args.query, rows=args.rows)
+        payload = chem_literature_search(args.query, rows=args.rows, source=args.source, year_from=args.year_from)
     elif args.command == "synthesis-suggest":
         payload = chem_synthesis_suggest(
             args.target_smiles,

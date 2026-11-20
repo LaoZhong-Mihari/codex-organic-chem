@@ -12,7 +12,7 @@ INSTALL_GUIDE = {
     "rdkit": {
         "purpose": "Core molecule parsing, validation, drawing, descriptors, conformers, and charges.",
         "required_for": ["normalize", "draw", "compute descriptors/conformers/charges", "reaction heuristics"],
-        "macos": ["uv sync --extra dev --extra mcp"],
+        "macos": ["uv sync --locked --extra mcp"],
         "notes": "Installed as the Python rdkit package in this project/tool environment.",
     },
     "open-babel": {
@@ -173,8 +173,61 @@ def tool_statuses() -> dict[str, dict]:
     return statuses
 
 
+def _dist_version(dist: str) -> str | None:
+    import importlib.metadata as metadata
+
+    try:
+        return metadata.version(dist)
+    except metadata.PackageNotFoundError:
+        return None
+
+
+def python_environment() -> dict:
+    """The Python side of the install: interpreter, required packages, the MCP
+    extra and the packaged review page. `doctor` reports these so that a broken
+    install shows up as a command to run, not as a tool failing later."""
+    import importlib.util
+    import platform
+    import sys
+    from pathlib import Path
+
+    checks: dict[str, dict] = {
+        "python": {
+            "status": "available" if sys.version_info[:2] == (3, 12) else "unsupported",
+            "version": platform.python_version(),
+            "required": ">=3.12,<3.13",
+            "fix": "uv sync --extra mcp   (uv picks or downloads Python 3.12)",
+        },
+    }
+    for dist in ("rdkit", "numpy", "pillow"):
+        version = _dist_version(dist)
+        checks[dist] = {"status": "available" if version else "unavailable", "version": version, "fix": "uv sync"}
+    mcp_version = _dist_version("mcp")
+    fastmcp = False
+    if mcp_version:
+        try:
+            fastmcp = importlib.util.find_spec("mcp.server.fastmcp") is not None
+        except (ImportError, ValueError):
+            fastmcp = False
+    checks["mcp"] = {
+        "status": "available" if fastmcp else ("unsupported" if mcp_version else "unavailable"),
+        "version": mcp_version,
+        "required": ">=1.2.0,<2 (codex-chem-mcp uses FastMCP, which mcp 2.x renamed)",
+        "needed_for": "codex-chem-mcp, the MCP server for Claude Code and Codex",
+        "fix": "uv sync --extra mcp" if not mcp_version else 'uv pip install "mcp>=1.2,<2"',
+    }
+    review_ui = Path(__file__).resolve().parent / "review_ui"
+    checks["review_ui"] = {
+        "status": "available" if (review_ui / "workbench.html").is_file() else "unavailable",
+        "needed_for": "review pages (input-review, review-batch, route-review, review-demo)",
+        "fix": "reinstall the package: codex_organic_chem/review_ui is missing from this install",
+    }
+    return checks
+
+
 def doctor_report() -> dict:
     statuses = tool_statuses()
+    env = python_environment()
     ocsr_keys = [f"{spec.name}_command" for spec in OCSR_ADAPTERS]
     missing = [
         key
@@ -186,16 +239,25 @@ def doctor_report() -> dict:
         for key in ["rdkit", "obabel", "xtb", "crest", "osra", *ocsr_keys]
         if statuses.get(key, {}).get("status") == "available"
     ]
+    calculation_ready = statuses["xtb"]["status"] == "available" and statuses["crest"]["status"] == "available"
+    next_steps = [f"{name}: {check['fix']}" for name, check in env.items() if check["status"] != "available"]
+    if not calculation_ready or statuses["obabel"]["status"] != "available":
+        next_steps.append("optional, Open Babel / xTB / CREST: scripts/install_external_tools_macos.sh "
+                          "(macOS) or docs/external-tools.md")
     return {
         "summary": {
+            "python_env_ready": all(env[key]["status"] == "available"
+                                    for key in ("python", "rdkit", "numpy", "pillow", "review_ui")),
+            "mcp_server_ready": env["mcp"]["status"] == "available",
             "ready": ready,
             "missing_or_optional": missing,
             "core_rdkit_ready": statuses["rdkit"]["status"] == "available",
-            "calculation_stack_ready": statuses["xtb"]["status"] == "available"
-            and statuses["crest"]["status"] == "available",
+            "calculation_stack_ready": calculation_ready,
             "image_ocr_stack_ready": statuses["osra"]["status"] == "available"
             or any(statuses[key]["status"] == "available" for key in ocsr_keys),
+            "next_steps": next_steps,
         },
+        "python_environment": env,
         "statuses": statuses,
         "install_guide": INSTALL_GUIDE,
         "publication_figure_guide": FIGURE_TOOL_GUIDE,

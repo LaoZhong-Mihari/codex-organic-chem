@@ -1,161 +1,110 @@
 ---
 name: organic-chemistry-assistant
-description: Use when validating, drawing, computing, parsing, or explaining organic molecules, reaction schemes, mechanisms, retrosynthesis, or literature-supported route screening with the local codex-organic-chem toolchain (CLI `codex-chem` or MCP `codex-organic-chem`).
+description: Use for organic chemistry whose answer must be right atom by atom - products and selectivity, mechanisms, synthetic routes and retrosynthesis, stereochemistry (R/S, E/Z, cis/trans, meso), counting isomers, stereoisomers or NMR signals, structures deduced from formulas, spectra or images, and molecule, scheme or mechanism figures. Covers exam and olympiad problems (also as page images, in any language) as much as lab and paper work. Load it before you start, even when the chemistry looks familiar and even when chemistry tools are already available, because answers fail on bookkeeping (a flipped stereocentre, a lost carbon, a miscounted isomer, a group that does not survive a reagent) and this skill says which check catches each slip and how to run it with the codex-organic-chem tools (MCP, CLI `codex-chem`, Python `codex_organic_chem.kit`). Not for chemistry without structures (pH, stoichiometry, redox balancing) or for work on the toolchain's own code.
 metadata:
-  short-description: Structure-grounded organic chemistry reasoning and publication figures
+  short-description: Structure-grounded organic chemistry with checks that can fail
 ---
 
 # Organic Chemistry Assistant
 
-Use the `codex-chem` CLI or `codex-organic-chem` MCP tools before making
-nontrivial chemistry claims. Tool output is evidence, not truth: keep warnings
-visible, label unverified mechanism or synthesis ideas as hypotheses, and never
-let a missing optional tool become a reason to invent results. Check optional
-capabilities only when needed: `codex-chem doctor`.
+You already know the chemistry. What goes wrong is bookkeeping and missing
+facts: a flipped wedge, a lost carbon, a miscounted isomer, a group that does
+not survive the reagent, a 3D claim never looked at, a catalyst whose known
+behaviour was not looked up. The tools exist to catch exactly those. A check
+that cannot come back negative (parsing a SMILES you just wrote) proves nothing;
+pick checks that would fail if you were wrong.
 
-## Reason from structure, not from names
+## The loop
 
-- Normalize every molecule with `chem_normalize_structure` before reasoning;
-  check sanitization, dummy atoms, metals, and stereo warnings.
-- Inspect the rendered molecule, then build a structure map: functional groups,
-  heteroatoms, pi systems, acidic/basic sites, nucleophilic/electrophilic
-  sites, leaving/protecting groups, steric congestion, stereo anchors, and
-  groups that must stay untouched. Reason from mapped reactive sites — never
-  from a compound name, formula, or remembered reaction pattern without
-  checking the required atoms and competing sites exist.
-- `chem_reaction_analyze` for sanity checks and condition/retro notes. It closes
-  mass/charge balance (hydrogens included): `analysis.mass_charge_balance`
-  `unbalanced` means the equation as written is wrong, not just
-  under-annotated — fix it or say what is missing before reasoning on it. Keep
-  tool facts, literature evidence, rule inference, and assumptions separate.
-- `chem_compute` when data can change the decision: `xtb_reactivity` ranks
-  nucleophilic/electrophilic sites by Fukui index and GFN2 charge per RDKit atom
-  index; `xtb_opt`/`xtb_thermo`/`crest` add geometry, free energy and imaginary
-  modes, conformer populations. Ions and `--solvent` are handled; read warnings.
+1. **Write structures, not names.** Every species you reason about gets a SMILES
+   with all stereochemistry (wedges and E/Z) defined. From an image: follow
+   [structure-input](references/structure-input.md) first; it ends at the
+   user's review page, also when your reading and OCSR agree.
+2. **Reason and commit** to an answer or a route.
+3. **Try to break it** with the matching check below, and with your own code:
+   `uv run python` with RDKit and `from codex_organic_chem import kit` is your
+   model kit and calculator. Never count atoms, isomers or signals, compare
+   stereoisomers, or judge a 3D relationship in your head.
+4. **Fix what the checks expose**, re-run them, and say in one line what changed
+   after checking. Report separately what a tool verified, what literature
+   supports, and what is your inference.
 
-## Mechanistic reasoning
+| About to claim | Check that can fail |
+| --- | --- |
+| two structures are the same / which isomer this is | `compare --a --b` (one SMILES: stereo audit) |
+| a number: stereoisomers, substitution products, 13C/1H environments | `enumerate --task stereoisomers\|substitution\|environments` |
+| a multi-step sequence or route | `route-check` (atoms, every stereocentre, bystander groups, target identity) |
+| cis or trans on a ring, which face is open, can two atoms reach, anti-periplanar, flat or not, can this ring fusion exist, which isomer is more stable | `model-kit --task cis_trans\|face\|distance\|dihedral\|planarity\|embed\|isomer_energies` |
+| which site is most nucleophilic/electrophilic; conformer populations; free energies | `compute --task xtb_reactivity\|crest\|xtb_thermo` |
+| a written equation is balanced | `reaction-analyze` (`mass_charge_balance`) |
+| electron-pushing steps are consistent | `mechanism-validate` |
+| this reaction is known / this catalyst gives this selectivity / this reagent is available | `literature-search` and web search when allowed |
 
-For mechanisms, read [references/mechanism-spec.md](references/mechanism-spec.md).
-For drawing quality, also use the concrete reference-and-inspection workflow in
-[references/mechanism-graphics.md](references/mechanism-graphics.md).
-Use one chemical source of truth: a mapped state + object-anchored electron
-moves + explicit next state. Write a MechanismSpec 2.1 JSON before drawing;
-the supplied [SN2 example](assets/sn2.mechanism.json) shows the exact fields.
+MCP names: `chem_compare_structures`, `chem_enumerate`, `chem_route_check`,
+`chem_model_kit`, `chem_compute`, `chem_reaction_analyze`,
+`chem_mechanism_validate`, `chem_literature_search`. API and the route format:
+[kit-api](references/kit-api.md).
 
-- Build the elementary steps from the validated structures and the specified
-  conditions. `chem_mechanism_draft` is a rule-template hypothesis with a
-  **reaction preview**, not a mechanism generator or evidence for the pathway.
-  A stronger model still needs to supply the intermediates and electron moves.
-- Keep atom maps stable, map each transferred H as a separate atom, and include
-  participating acids/bases and byproducts in both states. All arrows within
-  an elementary step act simultaneously on its starting state.
-- Run `chem_mechanism_validate` (CLI `mechanism-validate`) before rendering.
-  Fix invalid states, missing arrows and graph edits; do not explain away a
-  mass/charge discrepancy with a caption. `semantic_checks.status=valid` proves
-  only the supported electron bookkeeping. `incomplete` or `unsupported`
-  cannot support a claim that the mechanism was validated.
-- Check the live server's `chem_mechanism_spec_example`: if it returns a
-  pre-2.1 example, omits `layout.renderer: "compact"`, or lacks the validator,
-  use the updated checkout's CLI for **both validation and rendering**.
-  Compact output must report `figure_audit.renderer: "rdkit_compact_mechanism"`;
-  fall back to the CLI if a stale server still returns `codex_mechanism_canvas`.
-  A running MCP process may retain old code even after local files are synced;
-  a newer validator alone does not establish that the renderer was reloaded.
-- Render with `chem_mechanism_render`, inspect the image, and read the emitted
-  trace back. Use `mechanism.trace.json` or the SVG's embedded chemical bundle
-  to continue reasoning; a screenshot or an OCSR molecule alone loses electron
-  movement and state identity. Keep spec, SVG and trace from the same export.
-- Use the checked graph changes to explain which sites react and what remains
-  available for the next step. Separately assess competing paths, solvent,
-  acid/base state and stereoelectronic constraints. State conditional predictions
-  and evidence limits; connectivity checks alone do not establish kinetics,
-  selectivity, stereochemical outcome or experimental mechanism.
+Two things no check can tell you: what the user's drawing really shows, and
+what they already know about a step. For those the user has a review page.
+Structures you read from an image, and a route they will act on, go to it
+(`review-batch` / `input-review` / `route-review`) as a matter of course; the
+command answers `ask_user_first` or `review_disabled` when their setting says
+otherwise. See [human-review](references/human-review.md).
 
-## Images in: OCSR
+## Task protocols (read the one you need)
 
-- `chem_parse_image` (crops) / `chem_parse_scheme` (multi-compound schemes).
-  Preprocessing variants and all configured engines run automatically; ranking
-  rewards independent engines agreeing on one canonical structure.
-- Read the top candidate's `metadata.consensus`: `multi_engine` is strong;
-  `single_read` means compare the rendered candidate against the source image
-  before trusting it. Resolve `R`/`X` groups and abbreviations by graph
-  replacement, never string substitution.
-- Raw OCSR is never confirmed chemistry. Confirmation is **interactive, in the
-  editor — not "look at this picture"**: `chem_input_review` (single input or
-  OCSR result) and `chem_structure_review_batch` (multiple SMILES) open the
-  local structure editor in the browser automatically (Ketcher when built, a
-  built-in fallback otherwise). Tell the user it is open (give `review_url` if
-  `browser_opened` is false), block on
-  `chem_structure_review_result(session_id=..., wait=true)`, and continue only
-  with the returned structures — the user may have *corrected* them, so never
-  reuse the pre-review SMILES. Never infer stereochemistry an image does not
-  make explicit.
-- From the CLI, use `codex-chem input-review ... --wait`; without `--wait` the
-  command intentionally returns a static preview because its daemon review
-  server cannot outlive the command. MCP sessions remain live in the MCP
-  server process.
+- **Plan or audit a synthesis** -> [route-planning](references/route-planning.md).
+  Commit to one full route, write it as data, run `route-check`, fix, then
+  present with the three riskiest steps and tactical fallbacks.
+- **Predict a product, selectivity or best conditions** ->
+  [reaction-outcome](references/reaction-outcome.md). Enumerate competing
+  pathways before choosing; catalyst- and reagent-specific behaviour is decided
+  by precedent, not by structure checks.
+- **Structures from images, OCSR** ->
+  [structure-input](references/structure-input.md).
+- **A person checks or corrects structures or a route** ->
+  [human-review](references/human-review.md): when to open the review page,
+  what to send, how to wait, how to use what comes back.
+- **Mechanisms with curved arrows** -> [mechanism-spec](references/mechanism-spec.md)
+  (write a MechanismSpec 2.1, `mechanism-validate`, then render).
+- **Any figure for a human** -> [figures](references/figures.md) and, for
+  mechanisms, [mechanism-graphics](references/mechanism-graphics.md).
 
-## Images out: figures
+## What a passing check means
 
-Molecule, route and compact mechanism figures share the RDKit fixed-geometry
-painter. Use compact mechanisms by default; `layout.renderer: "legacy"` retains
-the old canvas only for compatibility. Results carry `publication_checks`;
-blocking issues downgrade `status` to `blocked_for_publication`.
-
-- Molecules/reactions: `chem_draw` (SVG master; PNG derived after the audit via
-  `output_file`).
-- Routes/schemes: `chem_route_figure` (`style_preset`: `acs` default, `rsc`,
-  `presentation`). Use it for any rendered scheme; RDKit one-call previews are
-  for internal checks only.
-- Mechanisms: resolve ambiguous/user-image inputs through `chem_input_review`.
-  Explicit text examples, tool tests and assistant-authored educational drafts
-  can proceed directly through normalization and validation; do not ask users
-  to approve each benchmark molecule. Require confirmed input for manuscript
-  claims. Use the mechanism workflow above for actual curved-arrow artwork.
-- Chemistry-aware renderers draw all bonds and arrows; hand-built SVG/PIL/canvas
-  may only do page composition. Prose belongs in the caption, not the graphic.
-- For a publication-like mechanism, inspect actual published Schemes and record
-  their DOI and Scheme number. Use skeletal structures, ordinary charge glyphs,
-  a shared bond scale, and short local electron arrows. Move/rotate the reagent
-  next to the reacting atom before trying a larger curve. Preserve the common
-  scaffold across states; keep captions and long explanations outside the art.
-- Open each exported image at its intended reading size and magnified. Inspect
-  arrow tails, arrowheads, implicit H, charges, lone pairs, plus signs and all
-  crossings. Compare it with a normal reaction figure of the same structures.
-  A nonblank PNG, valid graph, or passing geometric audit does not establish
-  good layout. Fix visible defects and render again before showing the result.
-- Report artifact status honestly: confirmed, draft, or blocked — with the
-  audit's warnings. `blocked_for_publication` output must be fixed or reported
-  as blocked, never shipped. A figure is "publication-ready" only when the
-  input was confirmed, `publication_checks` passes, and a human reviewed it.
-
-## Synthesis reasoning
-
-- Work one decision layer at a time: `chem_synthesis_suggest(...,
-  confirmed=false)` renders and requests confirmation; `confirmed=true`
-  proceeds with the first disconnection layer.
-- Screen broad, then narrow by structural fit, functional-group tolerance,
-  step economy, selectivity risk, redox/protecting-group burden, precedent,
-  and starting-material availability. Explain why alternatives fail.
-- `chem_literature_search` for route-defining or disputed steps: exact
-  transformation first, then analogous class/catalyst/substrate. Cite
-  DOI/title/year, and grade support: exact precedent > close analog > same
-  class > review > unsupported inference. Weak support must be called weak.
-- Wet-lab advice stays at condition-family level unless the user supplies
-  validated protocols and asks for operational detail.
+- `route-check` `blocking` issues are facts (structure unparseable, declared
+  balance does not close, last product is not the target). `review` items come
+  from heuristic atom mapping and reagent rules: answer each in one line or fix
+  it; some are false alarms. `consistent` means the bookkeeping holds, not that
+  a step works.
+- `model-kit` is sterics and ground-state geometry from conformers. It finds no
+  transition state; torsional, electronic and chelation control must be argued.
+- xTB/CREST numbers are approximate: gaps under ~1.5-2 kcal/mol decide nothing.
+- `mechanism-validate` `semantic_checks.status=valid` proves the supported
+  electron bookkeeping only; `incomplete` or `unsupported` cannot back a claim
+  that a mechanism was validated, and no status establishes kinetics.
+- A legal, balanced, stereo-defined product is a well-formed candidate, not the
+  observed product. Selectivity claims need precedent or a stated assumption.
+- Literature hits are abstract-level. Cite DOI, grade as exact precedent >
+  close analogue > same class > review, and never invent a reference.
+- Wet-lab advice stays at condition-family level unless the user supplies a
+  validated protocol and asks for operational detail.
+- If a tool is missing (`codex-chem doctor`), say so; do not invent its output.
 
 ## Quick calls
 
 ```bash
-uv run codex-chem normalize --smiles "CC(=O)Oc1ccccc1C(=O)O"
-uv run codex-chem draw --smiles "c1ccccc1C(=O)O" --output svg
-uv run codex-chem parse-image crop.png --kind molecule
-uv run codex-chem input-review --reaction-smiles "CBr.[OH-]>>CO.[Br-]" --wait
-uv run codex-chem review-batch --input reviews.json --wait
-uv run codex-chem route-figure --spec route.spec.json --output-dir out --format svg --format png
-uv run codex-chem reaction-analyze --reaction "CBr.[OH-]>>CO.[Br-]" --mode sanity_check
+uv run codex-chem compare --a "C[C@H](O)CC" --b "C[C@@H](O)CC"
+uv run codex-chem enumerate --smiles "CC1CCCCC1" --task substitution --substituent Cl
+uv run codex-chem route-check --example > route.json
+uv run codex-chem route-check --route route.json --figure-dir out --issues-only
+uv run codex-chem route-review --route route.json    # the user checks it in the browser
+uv run codex-chem review-result --session-id ID --wait
+uv run codex-chem model-kit --task face --smiles "O=C1C[C@@H]2CC[C@H]1C2" --atoms 1
+uv run codex-chem model-kit --task isomer_energies --smiles "C/C=C/C" --smiles "C/C=C\\C" --method xtb
 uv run codex-chem compute --smiles "CC(=O)C" --task xtb_reactivity --solvent water
-uv run codex-chem mechanism-render --spec mechanism.spec.json --output-dir out
+uv run codex-chem literature-search --query "cobalt alkyne migratory hydroboration" --rows 5
 uv run codex-chem mechanism-validate --spec mechanism.spec.json
-uv run codex-chem synthesis-suggest --target-smiles "CC(=O)Oc1ccccc1C(=O)O" --confirmed
+uv run python -c "from codex_organic_chem import kit; print(kit.compare('CCO','COC')['relation'])"
 ```

@@ -21,3 +21,6 @@ gfnff_topo
 integrations/ketcher/node_modules/
 integrations/ketcher/dist/
 integrations/marvin/
+
+# internal benchmark harness, problems and run records: kept local, not published
+benchmarks/

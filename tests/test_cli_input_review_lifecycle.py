@@ -12,9 +12,9 @@ def _review_environment() -> dict[str, str]:
     return environment
 
 
-def test_cli_input_review_without_wait_returns_static_preview_only():
+def test_cli_input_review_static_returns_the_preview_only():
     completed = subprocess.run(
-        [sys.executable, "-m", "codex_organic_chem", "input-review", "--smiles", "CCO"],
+        [sys.executable, "-m", "codex_organic_chem", "input-review", "--smiles", "CCO", "--static"],
         check=True,
         capture_output=True,
         text=True,
@@ -25,7 +25,7 @@ def test_cli_input_review_without_wait_returns_static_preview_only():
     assert payload["status"] == "awaiting_user_confirmation"
     assert "session_id" not in payload
     assert "review_url" not in payload
-    assert any("--wait" in warning for warning in payload["warnings"])
+    assert "svg" in payload["preview"]
 
 
 def test_cli_input_review_wait_keeps_server_alive_until_confirmation():
@@ -82,6 +82,9 @@ def test_cli_input_review_wait_keeps_server_alive_until_confirmation():
         assert result["items"][0]["status"] == "confirmed"
         assert result["items"][0]["canonical_smiles"] == "CCO"
     finally:
+        from codex_organic_chem import review_daemon
+
+        review_daemon.stop_daemon()
         if process.poll() is None:
             process.terminate()
             try:

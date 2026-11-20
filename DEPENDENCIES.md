@@ -12,23 +12,24 @@ The pinned dependency graphs live in `uv.lock` for Python and
 
 ## Required runtime
 
-- Python `>=3.12,<3.13`
+- Python `>=3.12,<3.13` (uv provides it)
 - `uv` for environment creation, locking, and running commands
-- RDKit `>=2024.9.1`
+- RDKit `>=2024.9.1`, NumPy `>=1.26`, Pillow `>=10.0`
 
-Install and check the core toolchain:
+Install and check the toolchain (step by step, with troubleshooting, in
+[INSTALL.md](INSTALL.md)):
 
 ```bash
-uv venv --python 3.12
-uv sync
-uv run codex-chem doctor
+uv sync --locked --extra mcp
+uv run python scripts/check_install.py
 ```
 
 ## Python extras
 
 The project defines optional extras in `pyproject.toml`:
 
-- `mcp`: installs `mcp>=1.2.0` for the `codex-chem-mcp` server.
+- `mcp`: installs `mcp>=1.2.0,<2` for the `codex-chem-mcp` server. The server
+  uses `FastMCP`, which mcp 2.x renamed, so the extra stays on 1.x.
 - `dev`: installs `pytest>=8.2.0` for the test suite.
 
 For normal development and MCP use:
@@ -48,7 +49,8 @@ CLI/MCP tools being available in the same environment:
 - `.agents/skills/organic-chemistry-assistant/SKILL.md`
 - `.agents/skills/organic-chemistry-assistant/agents/openai.yaml`
 - `.claude/skills/organic-chemistry-assistant/SKILL.md`
-- `.mcp.json`, which launches `uv run codex-chem-mcp`
+- `.mcp.json`, which launches `uv run --extra mcp codex-chem-mcp` (the extra is
+  installed on first start if the environment was synced without it)
 
 Codex installs the `.agents` version into its skills directory. Claude Code
 discovers the `.claude/skills` mirror while working in this repository and uses
@@ -120,14 +122,12 @@ chemistry figures. They are not required for the Python tests.
   `CODEX_CHEM_CHEMDOODLE_WEB_DIR`.
 - ChemAxon Marvin / Marvin JS: proprietary ChemAxon software; not bundled. Set
   `CODEX_CHEM_MARVIN_APP` or `CODEX_CHEM_MARVIN_JS_DIR`.
-- Ketcher: open-source structure/reaction correction gate. Use the bundled
-  Vite integration or set `CODEX_CHEM_KETCHER_URL` /
-  `CODEX_CHEM_KETCHER_DIST`.
-  `chem_structure_review_batch` uses the same integration for localhost batch
-  review sessions and serves the built `dist` directly when no URL override is
-  configured. If no Ketcher build or URL exists, the same review API serves a
-  dependency-free built-in editor with server-side RDKit previews. Review
-  sessions open in the default browser unless disabled.
+- Ketcher: open-source structure editor, optional. The review page itself is a
+  single dependency-free HTML file served by the Python package; when
+  `integrations/ketcher/dist` exists (or `CODEX_CHEM_KETCHER_DIST` points at a
+  build) the page gains a `Draw...` button that embeds Ketcher. Without it the
+  page still offers click-to-flip stereo edits, alternatives and SMILES/Molfile
+  entry.
 - Inkscape or Adobe Illustrator: optional final vector-polish tools. They do
   not validate chemistry.
 
@@ -153,7 +153,10 @@ export CODEX_CHEM_MARVIN_APP="/Applications/MarvinSketch.app"
 export CODEX_CHEM_MARVIN_JS_DIR="/path/to/marvin-js"
 export CODEX_CHEM_KETCHER_URL="http://localhost:8080"
 export CODEX_CHEM_KETCHER_DIST="/path/to/ketcher/build"
-export CODEX_CHEM_REVIEW_OPEN_BROWSER=0
+export CODEX_CHEM_REVIEW_OPEN_BROWSER=0   # return the review URL without opening a browser
+export CODEX_CHEM_REVIEW=ask              # auto | ask | off; overrides `codex-chem review-mode`
+export CODEX_CHEM_HOME="$HOME/.codex-chem" # review results, saved settings, review-server state
+export CODEX_CHEM_ENABLE_PYTHON=1   # opt-in: MCP tool chem_python (arbitrary local code)
 ```
 
 ## Ketcher frontend integration
@@ -178,17 +181,37 @@ npm run preview -- --port 4173
 `node_modules/` and `dist/` are intentionally ignored and should be rebuilt
 from `package-lock.json`.
 
-The batch review API itself uses only Python's standard library and listens on
-`127.0.0.1`. When `CODEX_CHEM_KETCHER_URL` is not set, the review server serves
-`integrations/ketcher/dist` at the same localhost origin as the API; if that
-build is absent, it serves the built-in review editor instead. CLI callers must
-use `input-review --wait` or `review-batch --wait` to keep the daemon-backed
-localhost server alive for the duration of interactive review.
+The review server uses only Python's standard library and listens on
+`127.0.0.1`; every session has its own random token. CLI review commands hand
+their session to a background copy of that server
+(`python -m codex_organic_chem.review_daemon`, started on demand, stopped after
+15 idle minutes, state in `$CODEX_CHEM_HOME/review-server.json`), so the page
+outlives the command. The MCP server hosts its sessions in-process. Session
+results are written to `$CODEX_CHEM_HOME/reviews/`.
 
 ## Network access
 
-Most tools are local. `chem_literature_search` uses the Crossref Works API
-(`https://api.crossref.org/works`) for literature metadata when requested.
+Most tools are local. `chem_literature_search` sends the query text to the
+OpenAlex Works API (abstracts, citation counts, open-access links) and to the
+Crossref Works API as fallback and supplement. No API key and no contact
+address is sent. The verification kit (`compare`, `enumerate`, `route-check`,
+`model-kit`) needs only RDKit and NumPy, which RDKit already depends on; xTB is
+used for `model-kit` refinement when installed.
+
+## Code execution through MCP (opt-in)
+
+Hosts with a shell should run `uv run python` and import
+`codex_organic_chem.kit`. For MCP-only hosts the server can expose
+`chem_python`, which runs an arbitrary Python snippet as the local user with a
+timeout. It is registered only when the server starts with
+`CODEX_CHEM_ENABLE_PYTHON=1`:
+
+```json
+{"mcpServers": {"codex-organic-chem": {"command": "uv", "args": ["run", "codex-chem-mcp"],
+  "env": {"CODEX_CHEM_ENABLE_PYTHON": "1"}}}}
+```
+
+Leave it off when the server may be driven by content you do not trust.
 
 ## Licenses and third-party files
 

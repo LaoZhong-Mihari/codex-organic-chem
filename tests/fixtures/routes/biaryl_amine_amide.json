@@ -1,0 +1,134 @@
+{
+  "title": "Suzuki coupling, CBS reduction, Mitsunobu amination and peptide coupling",
+  "target": "C[C@@H](NC(=O)[C@@H]1CCCN1)c1ccc(cc1)-c1ccccc1",
+  "compounds": {
+    "1": {
+      "smiles": "O=Cc1ccc(Br)cc1",
+      "name": "4-bromobenzaldehyde"
+    },
+    "2": {
+      "smiles": "OB(O)c1ccccc1",
+      "name": "phenylboronic acid"
+    },
+    "3": {
+      "smiles": "O=Cc1ccc(cc1)-c1ccccc1",
+      "name": "4-phenylbenzaldehyde"
+    },
+    "4": {
+      "smiles": "C[Mg]Br",
+      "name": "MeMgBr"
+    },
+    "5": {
+      "smiles": "CC(O)c1ccc(cc1)-c1ccccc1",
+      "name": "racemic carbinol"
+    },
+    "6": {
+      "smiles": "CC(=O)c1ccc(cc1)-c1ccccc1",
+      "name": "ketone"
+    },
+    "7": {
+      "smiles": "C[C@H](O)c1ccc(cc1)-c1ccccc1",
+      "name": "(S)-carbinol"
+    },
+    "8": {
+      "smiles": "O=C1NC(=O)c2ccccc12",
+      "name": "phthalimide"
+    },
+    "9": {
+      "smiles": "C[C@@H](N1C(=O)c2ccccc2C1=O)c1ccc(cc1)-c1ccccc1",
+      "name": "(R)-phthalimide"
+    },
+    "10": {
+      "smiles": "C[C@@H](N)c1ccc(cc1)-c1ccccc1",
+      "name": "(R)-amine"
+    },
+    "11": {
+      "smiles": "OC(=O)[C@@H]1CCCN1C(=O)OC(C)(C)C",
+      "name": "Boc-L-proline"
+    },
+    "12": {
+      "smiles": "C[C@@H](NC(=O)[C@@H]1CCCN1C(=O)OC(C)(C)C)c1ccc(cc1)-c1ccccc1",
+      "name": "Boc amide"
+    },
+    "13": {
+      "smiles": "C[C@@H](NC(=O)[C@@H]1CCCN1)c1ccc(cc1)-c1ccccc1",
+      "name": "amide"
+    }
+  },
+  "steps": [
+    {
+      "step": 1,
+      "reactants": [
+        "1",
+        "2"
+      ],
+      "product": "3",
+      "conditions": "Pd(PPh3)4, K2CO3, dioxane/H2O, 90 °C"
+    },
+    {
+      "step": 2,
+      "reactants": [
+        "3",
+        "4"
+      ],
+      "product": "5",
+      "conditions": "MeMgBr, THF, 0 °C; then NH4Cl (aq)"
+    },
+    {
+      "step": 3,
+      "reactants": [
+        "5"
+      ],
+      "product": "6",
+      "conditions": "DMP, CH2Cl2, rt"
+    },
+    {
+      "step": 4,
+      "reactants": [
+        "6"
+      ],
+      "product": "7",
+      "conditions": "(R)-CBS catalyst, BH3·SMe2, THF, -20 °C"
+    },
+    {
+      "step": 5,
+      "reactants": [
+        "7",
+        "8"
+      ],
+      "product": "9",
+      "conditions": "PPh3, DIAD, THF, 0 °C to rt"
+    },
+    {
+      "step": 6,
+      "reactants": [
+        "9"
+      ],
+      "product": "10",
+      "conditions": "N2H4·H2O, EtOH, reflux",
+      "reagents": [
+        "NN"
+      ],
+      "byproducts": [
+        "O=C1NNC(=O)c2ccccc12"
+      ]
+    },
+    {
+      "step": 7,
+      "reactants": [
+        "10",
+        "11"
+      ],
+      "product": "12",
+      "conditions": "HATU, iPr2NEt, DMF, rt"
+    },
+    {
+      "step": 8,
+      "reactants": [
+        "12"
+      ],
+      "product": "13",
+      "conditions": "TFA, CH2Cl2, 0 °C"
+    }
+  ]
+}

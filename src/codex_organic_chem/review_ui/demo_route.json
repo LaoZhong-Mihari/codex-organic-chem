@@ -1,0 +1,119 @@
+{
+  "title": "trans-4-hydroxy-L-proline to a trans-4-acetamido acid by two inversions",
+  "target": "OC(=O)[C@@H]1C[C@@H](NC(C)=O)CN1C(=O)OC(C)(C)C",
+  "compounds": {
+    "1": {
+      "smiles": "COC(=O)[C@@H]1C[C@@H](O)CN1",
+      "name": "trans-4-hydroxy-L-proline methyl ester"
+    },
+    "2": {
+      "smiles": "COC(=O)[C@@H]1C[C@@H](O)CN1C(=O)OC(C)(C)C",
+      "name": "N-Boc"
+    },
+    "3": {
+      "smiles": "OC(=O)c1ccc(cc1)[N+](=O)[O-]",
+      "name": "4-nitrobenzoic acid"
+    },
+    "4": {
+      "smiles": "COC(=O)[C@@H]1C[C@H](OC(=O)c2ccc(cc2)[N+](=O)[O-])CN1C(=O)OC(C)(C)C",
+      "name": "cis PNB ester"
+    },
+    "5": {
+      "smiles": "COC(=O)[C@@H]1C[C@H](O)CN1C(=O)OC(C)(C)C",
+      "name": "cis alcohol"
+    },
+    "6": {
+      "smiles": "COC(=O)[C@@H]1C[C@H](OS(C)(=O)=O)CN1C(=O)OC(C)(C)C",
+      "name": "cis mesylate"
+    },
+    "7": {
+      "smiles": "COC(=O)[C@@H]1C[C@@H](N=[N+]=[N-])CN1C(=O)OC(C)(C)C",
+      "name": "trans azide"
+    },
+    "8": {
+      "smiles": "COC(=O)[C@@H]1C[C@@H](N)CN1C(=O)OC(C)(C)C",
+      "name": "trans amine"
+    },
+    "9": {
+      "smiles": "COC(=O)[C@@H]1C[C@@H](NC(C)=O)CN1C(=O)OC(C)(C)C",
+      "name": "acetamide"
+    },
+    "10": {
+      "smiles": "OC(=O)[C@@H]1C[C@@H](NC(C)=O)CN1C(=O)OC(C)(C)C",
+      "name": "acid"
+    }
+  },
+  "steps": [
+    {
+      "step": 1,
+      "reactants": [
+        "1"
+      ],
+      "product": "2",
+      "conditions": "Boc2O, Et3N, CH2Cl2, rt"
+    },
+    {
+      "step": 2,
+      "reactants": [
+        "2",
+        "3"
+      ],
+      "product": "4",
+      "conditions": "PPh3, DIAD, THF, 0 °C to rt"
+    },
+    {
+      "step": 3,
+      "reactants": [
+        "4"
+      ],
+      "product": "5",
+      "conditions": "K2CO3, MeOH, 0 °C",
+      "reagents": [
+        "CO"
+      ],
+      "byproducts": [
+        "COC(=O)c1ccc(cc1)[N+](=O)[O-]"
+      ]
+    },
+    {
+      "step": 4,
+      "reactants": [
+        "5"
+      ],
+      "product": "6",
+      "conditions": "MsCl, Et3N, CH2Cl2, 0 °C"
+    },
+    {
+      "step": 5,
+      "reactants": [
+        "6"
+      ],
+      "product": "7",
+      "conditions": "NaN3, DMF, 70 °C"
+    },
+    {
+      "step": 6,
+      "reactants": [
+        "7"
+      ],
+      "product": "8",
+      "conditions": "H2 (1 atm), Pd/C, MeOH, rt"
+    },
+    {
+      "step": 7,
+      "reactants": [
+        "8"
+      ],
+      "product": "9",
+      "conditions": "Ac2O, pyridine, CH2Cl2, rt"
+    },
+    {
+      "step": 8,
+      "reactants": [
+        "9"
+      ],
+      "product": "10",
+      "conditions": "LiOH, THF/H2O, 0 °C"
+    }
+  ]
+}

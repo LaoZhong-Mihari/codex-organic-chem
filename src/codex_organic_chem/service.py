@@ -28,11 +28,61 @@ from .semiempirical import (
     xtb_thermo_record,
 )
 from .synthesis import suggest_synthesis_path
-from .structure_review import review_session_result, start_structure_review_batch
+from .structure_review import (
+    open_review,
+    review_gate,
+    review_mode_status,
+    review_session_result,
+    set_review_mode,
+)
+from . import model_kit as _model_kit
+from . import route_check as _route_check
+from . import structure_compare as _structure
 
 
-def chem_parse_image(path: str, kind: str = "auto") -> dict[str, Any]:
-    return parse_image(path=path, kind=kind)
+_DRAWING_KEYS = {"svg", "molblock"}
+_GEOMETRY_KEYS = {"atoms", "bonds"}
+
+
+def _without_drawings(payload: Any, inside_metadata: bool = False) -> Any:
+    """Drop SVG, Molfile and per-atom OCSR geometry from a tool result.
+
+    They are for renderers. In an assistant's context they are tens of
+    thousands of characters that say nothing the SMILES does not.
+    """
+    if isinstance(payload, dict):
+        return {
+            key: _without_drawings(value, inside_metadata or key == "metadata")
+            for key, value in payload.items()
+            if key not in _DRAWING_KEYS and not (inside_metadata and key in _GEOMETRY_KEYS)
+        }
+    if isinstance(payload, list):
+        return [_without_drawings(value, inside_metadata) for value in payload]
+    return payload
+
+
+def _load_route(route: dict[str, Any] | None, route_path: str | None) -> dict[str, Any]:
+    """A route given inline, or read from the JSON file it was written to."""
+    if route is None and route_path:
+        import json
+
+        with open(Path(route_path).expanduser(), encoding="utf-8") as handle:
+            route = json.load(handle)
+    if not isinstance(route, dict):
+        raise ValueError("Give the route as an object (route) or as the path of its JSON file (route_path).")
+    return route
+
+
+def chem_parse_image(
+    path: str | None = None,
+    kind: str = "auto",
+    image_path: str | None = None,
+    include_drawings: bool = False,
+) -> dict[str, Any]:
+    """OCSR candidates for an image. ``image_path`` is accepted as an alias of
+    ``path``; drawings and per-atom geometry are left out unless asked for."""
+    result = parse_image(path=path or image_path or "", kind=kind)
+    return result if include_drawings else _without_drawings(result)
 
 
 def chem_ocsr_benchmark(gold_smiles: str, image_dir: str) -> dict[str, Any]:
@@ -51,8 +101,13 @@ def chem_input_review(
     kind: str = "auto",
     interactive: bool = True,
     timeout_s: int = 1800,
+    confirmed: bool = False,
+    detached: bool = False,
+    language: str | None = None,
+    note: str | None = None,
+    source_image: str | None = None,
 ) -> dict[str, Any]:
-    return prepare_input_review(
+    result = prepare_input_review(
         smiles=smiles,
         reaction_smiles=reaction_smiles,
         molfile=molfile,
@@ -60,15 +115,75 @@ def chem_input_review(
         kind=kind,
         interactive=interactive,
         timeout_s=timeout_s,
+        confirmed=confirmed,
+        detached=detached,
+        language=language,
+        note=note,
+        source_image=source_image,
     )
+    if image_path:  # OCSR candidates: keep the readings, drop their drawings
+        result = _without_drawings(result)
+    return result
 
 
 def chem_structure_review_batch(
     items: list[dict[str, Any]],
     wait: bool = False,
     timeout_s: int = 1800,
+    title: str | None = None,
+    intro: str | None = None,
+    language: str | None = None,
+    images: list[str] | None = None,
+    confirmed: bool = False,
+    detached: bool = False,
 ) -> dict[str, Any]:
-    return start_structure_review_batch(items=items, wait=wait, timeout_s=timeout_s)
+    """Open the review page on a queue of structures.
+
+    Each item needs ``smiles`` and may carry ``id``, ``label``, ``image_path``
+    (the crop it was read from), ``note`` (how it was read, what was assumed),
+    ``question`` (one thing to ask the reviewer), ``source`` and ``candidates``
+    (alternative readings as SMILES or ``{label, smiles}``).
+    """
+    gate = review_gate(confirmed, what=f"{len(items) if isinstance(items, list) else 'these'} structure(s)")
+    if gate is not None:
+        return gate
+    try:
+        return open_review(
+            items=items, wait=wait, timeout_s=timeout_s, detached=detached,
+            title=title, intro=intro, language=language, images=images,
+        )
+    except RuntimeError as exc:  # the detached review server could not be reached
+        return {"status": "error", "warnings": [str(exc)]}
+
+
+def chem_route_review(
+    route: dict[str, Any] | None = None,
+    wait: bool = False,
+    timeout_s: int = 3600,
+    title: str | None = None,
+    intro: str | None = None,
+    language: str | None = None,
+    confirmed: bool = False,
+    detached: bool = False,
+    route_path: str | None = None,
+    images: list[str] | None = None,
+) -> dict[str, Any]:
+    """Open the review page on a route (same format as ``chem_route_check``).
+
+    The reviewer sees the audit step by step, can correct any structure or
+    the conditions of a step (the audit re-runs), answers audit prompts,
+    comments, and approves the route or sends it back.
+    """
+    gate = review_gate(confirmed, what="this route step by step")
+    if gate is not None:
+        return gate
+    try:
+        return open_review(
+            route=_load_route(route, route_path), wait=wait, timeout_s=timeout_s, detached=detached,
+            title=title, intro=intro, language=language, images=images,
+        )
+    except (ValueError, RuntimeError, OSError) as exc:
+        return {"status": "error", "warnings": [str(exc)]}
 
 
 def chem_structure_review_result(
@@ -77,7 +192,24 @@ def chem_structure_review_result(
     wait: bool = False,
     timeout_s: int = 1800,
 ) -> dict[str, Any]:
+    """Result of a structure or route review, from this process or from disk."""
     return review_session_result(session_id=session_id, token=review_token, wait=wait, timeout_s=timeout_s)
+
+
+def chem_review_mode(mode: str | None = None) -> dict[str, Any]:
+    """Show, or with ``mode`` save, when the review page opens: auto, ask or off."""
+    if mode is None:
+        return review_mode_status()
+    try:
+        return set_review_mode(mode)
+    except ValueError as exc:
+        return {"status": "error", "warnings": [str(exc)]}
+
+
+def chem_review_demo(language: str = "en", detached: bool = True, which: str = "both") -> dict[str, Any]:
+    from .review_demo import review_demo
+
+    return review_demo(language=language, detached=detached, which=which)
 
 
 def chem_normalize_structure(smiles: str | None = None, molfile: str | None = None) -> dict[str, Any]:
@@ -255,8 +387,10 @@ def chem_figure_tool_status() -> dict[str, Any]:
     return figure_tool_statuses()
 
 
-def chem_literature_search(query: str, rows: int = 5) -> dict[str, Any]:
-    return literature_search(query=query, rows=rows)
+def chem_literature_search(
+    query: str, rows: int = 5, source: str = "auto", year_from: int | None = None
+) -> dict[str, Any]:
+    return literature_search(query=query, rows=rows, source=source, year_from=year_from)
 
 
 def chem_reaction_analyze(input: str, mode: str = "sanity_check") -> dict[str, Any]:
@@ -320,3 +454,156 @@ def chem_synthesis_suggest(
         literature=literature,
         literature_rows=literature_rows,
     )
+
+
+# --------------------------------------------------------------------------
+# verification kit: checks whose answer differs between a right and a wrong
+# structure, route or 3D claim
+
+
+def _guard(function: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
+    try:
+        return function(*args, **kwargs)
+    except _structure.StructureError as exc:
+        return {"status": "error", "warnings": [str(exc)]}
+
+
+def chem_compare_structures(
+    smiles_a: str | None = None,
+    smiles_b: str | None = None,
+    a: str | None = None,
+    b: str | None = None,
+) -> dict[str, Any]:
+    """Relationship between two structures, or a stereo audit of one.
+
+    ``a`` / ``b`` are accepted as aliases, matching ``kit.compare(a, b)`` and
+    the CLI flags.
+    """
+    smiles_a, smiles_b = smiles_a or a or "", smiles_b or b
+    if not smiles_b:
+        return _guard(_structure.stereo_audit, smiles_a)
+    return _guard(_structure.compare_structures, smiles_a, smiles_b)
+
+
+ENUMERATE_TASKS = ("stereoisomers", "substitution", "environments", "groups")
+
+
+def chem_enumerate(
+    smiles: str,
+    task: str = "stereoisomers",
+    substituent: str = "Cl",
+    n_substitutions: int = 1,
+) -> dict[str, Any]:
+    """Count instead of guessing: stereoisomers, substitution products, NMR environments, groups."""
+    if task == "stereoisomers":
+        return _guard(_structure.enumerate_stereoisomers, smiles)
+    if task == "substitution":
+        return _guard(_structure.substitution_products, smiles, substituent, n_substitutions=n_substitutions)
+    if task == "environments":
+        return _guard(_structure.symmetry_environments, smiles)
+    if task == "groups":
+        return _guard(_route_check.functional_groups, smiles)
+    return {"status": "error", "warnings": [f"Unknown task {task!r}; use one of {ENUMERATE_TASKS}."]}
+
+
+def chem_model_kit(
+    task: str,
+    smiles: str | list[str],
+    atoms: list[int] | None = None,
+    by_map: bool = False,
+    method: str = "mmff",
+    solvent: str | None = None,
+    threshold: float = 4.0,
+    refine: str = "auto",
+) -> dict[str, Any]:
+    """3D model-kit questions: face accessibility, reach, dihedrals, planarity, feasibility, isomer energies."""
+    options: dict[str, Any] = {}
+    if task in {"distance", "dihedral", "face", "cis_trans"}:
+        options.update({"atoms": atoms or [], "by_map": by_map})
+    if task == "distance":
+        options["threshold"] = threshold
+    if task == "planarity":
+        options.update({"atoms": atoms, "by_map": by_map, "refine": refine, "solvent": solvent})
+    if task == "isomer_energies":
+        options.update({"method": method, "solvent": solvent})
+    return _model_kit.model_kit(task, smiles, **options)
+
+
+def chem_route_check(
+    route: dict[str, Any] | None = None,
+    figure_output_dir: str | None = None,
+    mcs_timeout_s: int = 6,
+    route_path: str | None = None,
+) -> dict[str, Any]:
+    """Audit a route step by step; optionally draw every numbered compound as a scheme."""
+    try:
+        route = _load_route(route, route_path)
+    except (ValueError, OSError) as exc:
+        return {"status": "error", "warnings": [str(exc)]}
+    report = _guard(_route_check.route_check, route, mcs_timeout_s=mcs_timeout_s)
+    if figure_output_dir and report.get("status") not in {"error", "unavailable"}:
+        try:
+            spec = _route_check.route_to_figure_spec(route)
+            figure = render_route_figure(spec=spec, output_dir=figure_output_dir, basename="route", formats=["svg", "png"])
+            report["figure"] = {
+                "status": figure.get("status"),
+                "files": figure.get("files") or figure.get("output_files"),
+                "warnings": figure.get("warnings", []),
+                "note": "Open the image and compare every drawn structure with what you intended.",
+            }
+        except Exception as exc:
+            report["figure"] = {"status": "error", "warnings": [f"Route figure failed: {exc}"]}
+    return report
+
+
+def chem_route_check_example() -> dict[str, Any]:
+    return _route_check.route_check_example()
+
+
+PYTHON_ENV_FLAG = "CODEX_CHEM_ENABLE_PYTHON"
+
+
+def python_tool_enabled() -> bool:
+    import os
+
+    return os.environ.get(PYTHON_ENV_FLAG, "").strip().lower() in {"1", "true", "yes"}
+
+
+def chem_python(code: str, timeout_s: int = 120) -> dict[str, Any]:
+    """Run a Python snippet with RDKit and this toolkit importable (opt-in).
+
+    Meant for hosts without a shell. It executes arbitrary code as the current
+    user, so it stays disabled unless CODEX_CHEM_ENABLE_PYTHON=1 is set for the
+    MCP server process.
+    """
+    import subprocess
+    import sys
+    import tempfile
+
+    if not python_tool_enabled():
+        return {
+            "status": "disabled",
+            "warnings": [
+                f"Code execution is off. Set {PYTHON_ENV_FLAG}=1 for the MCP server to enable it, or run "
+                "`uv run python` from a shell: `from codex_organic_chem import kit`."
+            ],
+        }
+    limit = 20000
+    with tempfile.TemporaryDirectory(prefix="codex-chem-python-") as work:
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-I", "-c", code],
+                capture_output=True,
+                text=True,
+                timeout=max(1, min(int(timeout_s), 900)),
+                cwd=work,
+            )
+        except subprocess.TimeoutExpired:
+            return {"status": "timeout", "warnings": [f"Snippet exceeded {timeout_s} s."]}
+    return {
+        "status": "ok" if proc.returncode == 0 else "error",
+        "exit_code": proc.returncode,
+        "stdout": proc.stdout[-limit:],
+        "stderr": proc.stderr[-limit:],
+        "truncated": len(proc.stdout) > limit or len(proc.stderr) > limit,
+    }

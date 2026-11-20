@@ -14,6 +14,9 @@ const reviewConfig = {
   api: (params.get('api') || window.location.origin).replace(/\/$/, ''),
 };
 const hasReviewSession = Boolean(reviewConfig.sessionId && reviewConfig.token && reviewConfig.api);
+// ?embed=1: the review workbench hosts this page in an iframe and drives the
+// editor through window.ketcher, so only the drawing canvas is shown.
+const embedMode = params.get('embed') === '1';
 const terminalStatuses = new Set(['confirmed', 'modified', 'skipped', 'error']);
 
 class EditorErrorBoundary extends React.Component {
@@ -293,9 +296,9 @@ function App() {
   );
 
   return (
-    <div className="app-shell">
-      {hasReviewSession ? reviewToolbar : demoToolbar}
-      {hasReviewSession && (
+    <div className={embedMode ? 'app-shell embed' : 'app-shell'}>
+      {!embedMode && (hasReviewSession ? reviewToolbar : demoToolbar)}
+      {!embedMode && hasReviewSession && (
         <div className="queue-panel">
           {items.map((item, index) => (
             <button

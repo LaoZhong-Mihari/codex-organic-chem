@@ -79,9 +79,11 @@ wheels = [
 
 [[package]]
 name = "codex-organic-chem"
-version = "1.0.0"
+version = "1.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "numpy" },
+    { name = "pillow" },
     { name = "rdkit" },
 ]
 
@@ -95,7 +97,9 @@ mcp = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.2.0" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.2.0,<2" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "pillow", specifier = ">=10.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2.0" },
     { name = "rdkit", specifier = ">=2024.9.1" },
 ]

@@ -1,0 +1,795 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Structure review</title>
+<style>
+:root{
+  --bg:#f4f5f7; --panel:#fff; --line:#dfe2e8; --line2:#eceef2; --text:#14171c; --muted:#5d6675;
+  --accent:#2457d6; --accent-soft:#e8eefc; --ok:#0a7d33; --ok-soft:#e6f4ea; --warn:#a85b00; --warn-soft:#fff3dc;
+  --bad:#b42318; --bad-soft:#fde8e6; --info:#3b5b8c; --info-soft:#e9f0fa; --radius:10px;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Arial,sans-serif;background:var(--bg);color:var(--text)}
+button{font:inherit;font-weight:600;font-size:13px;padding:6px 12px;border-radius:7px;border:1px solid #c5cad3;background:#fff;color:var(--text);cursor:pointer;white-space:nowrap}
+button:hover:not(:disabled){border-color:#8b94a3;background:#f7f8fa}
+button:disabled{opacity:.45;cursor:default}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.primary:hover:not(:disabled){background:#1d49b8;border-color:#1d49b8}
+button.ok{background:var(--ok);border-color:var(--ok);color:#fff}
+button.ok:hover:not(:disabled){background:#086a2b;border-color:#086a2b}
+button.danger{color:var(--bad);border-color:#e3b3ad}
+button.small{padding:3px 8px;font-size:12px;font-weight:500}
+button.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+button.on.good{background:var(--ok-soft);border-color:var(--ok);color:var(--ok)}
+button.on.badc{background:var(--bad-soft);border-color:var(--bad);color:var(--bad)}
+textarea,input[type=text]{font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;width:100%;padding:7px 9px;border:1px solid #c5cad3;border-radius:7px;background:#fff;color:var(--text)}
+textarea.prose,input.prose{font:14px/1.45 inherit;font-family:inherit}
+textarea:focus,input:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+header{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid var(--line);padding:10px 20px;display:flex;align-items:center;gap:14px}
+header h1{font-size:16px;margin:0;font-weight:700}
+header .sub{color:var(--muted);font-size:12.5px}
+header .spacer{flex:1}
+.progress{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}
+.bar{width:120px;height:6px;border-radius:3px;background:var(--line2);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--ok);width:0}
+#banner{display:none;margin:14px 20px 0;padding:12px 16px;border-radius:var(--radius);background:var(--ok-soft);border:1px solid #b7dfc2;font-weight:600}
+#banner.bad{background:var(--bad-soft);border-color:#f0c0ba}
+#intro{display:none;margin:14px 20px 0;padding:11px 15px;border-radius:var(--radius);background:var(--info-soft);border:1px solid #cddcf0;white-space:pre-wrap}
+main{padding:14px 20px 60px}
+.layout{display:grid;grid-template-columns:230px minmax(0,1fr);gap:16px;align-items:start}
+.queue{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:8px;position:sticky;top:64px;max-height:calc(100vh - 84px);overflow:auto}
+.q{display:flex;gap:8px;align-items:center;padding:6px;border-radius:8px;cursor:pointer;border:1px solid transparent}
+.q:hover{background:#f6f7f9}
+.q.active{background:var(--accent-soft);border-color:#c2d2f7}
+.q .thumb{flex:0 0 62px;height:46px;background:#fff;border:1px solid var(--line2);border-radius:6px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.q .thumb svg{width:100%;height:100%}
+.q .qt{min-width:0;flex:1}
+.q .ql{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pill{display:inline-block;font-size:11.5px;font-weight:600;padding:1px 8px;border-radius:999px;background:var(--line2);color:var(--muted)}
+.pill.confirmed,.pill.ok{background:var(--ok-soft);color:var(--ok)}
+.pill.modified,.pill.info{background:var(--accent-soft);color:var(--accent)}
+.pill.rejected,.pill.error,.pill.blocking,.pill.bad{background:var(--bad-soft);color:var(--bad)}
+.pill.review,.pill.warn{background:var(--warn-soft);color:var(--warn)}
+.pill.skipped{background:var(--line2);color:var(--muted)}
+.qnote{padding:8px 6px 4px;border-top:1px solid var(--line2);margin-top:8px}
+.qnote label,.field label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px}
+.item-head{display:flex;align-items:baseline;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.item-head h2{font-size:17px;margin:0}
+.item-head .src{color:var(--muted);font-size:13px}
+.panes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.panes.single{grid-template-columns:minmax(0,1fr)}
+.pane{border:1px solid var(--line2);border-radius:8px;background:#fff;min-height:300px;display:flex;flex-direction:column}
+.pane h3{margin:0;padding:7px 11px;font-size:12px;font-weight:700;color:var(--muted);border-bottom:1px solid var(--line2);text-transform:uppercase;letter-spacing:.04em;display:flex;gap:8px;align-items:center}
+.pane h3 .hint{text-transform:none;letter-spacing:0;font-weight:500}
+.pane .body{flex:1;display:flex;align-items:center;justify-content:center;padding:6px;overflow:hidden}
+.pane img{max-width:100%;max-height:420px;cursor:zoom-in}
+.canvas svg{max-width:100%;height:auto;display:block}
+.canvas .atom-selector.live{cursor:pointer;pointer-events:all}
+.canvas .atom-selector.live:hover,.canvas .atom-selector.glow{stroke:var(--accent)!important;stroke-opacity:.9!important;stroke-width:2px!important;fill:var(--accent)!important;fill-opacity:.12!important}
+.facts{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px;color:var(--muted);margin-top:10px}
+.facts b{color:var(--text);font-weight:600}
+.diff{margin-top:8px;padding:7px 11px;border-radius:8px;font-size:13px;font-weight:600;display:none}
+.diff.same{display:block;background:var(--line2);color:var(--muted);font-weight:500}
+.diff.changed{display:block;background:var(--warn-soft);color:var(--warn)}
+.diff.major{display:block;background:var(--bad-soft);color:var(--bad)}
+.warnbox{margin-top:8px;color:var(--warn);font-size:13px}
+.warnbox.err{color:var(--bad);font-weight:600}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.chip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:8px;padding:3px 5px 3px 9px;background:#fafbfc;font-size:13px}
+.chip.open{border-color:#f0b4ae;background:var(--bad-soft)}
+.chip .nm{font-weight:700;margin-right:3px}
+.chip button{padding:1px 8px;font-size:12.5px;border-radius:6px}
+.chip .x{border:none;background:none;color:var(--muted);padding:1px 5px}
+.tools{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.field{margin-top:12px}
+.callout{margin-top:12px;padding:10px 13px;border-radius:8px;background:var(--info-soft);border:1px solid #cddcf0}
+.callout.q{background:var(--warn-soft);border-color:#f1dba8}
+.callout .who{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--info);margin-bottom:2px}
+.callout.q .who{color:var(--warn)}
+.cands{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.cand{border:1px solid var(--line);border-radius:8px;background:#fff;width:150px;padding:4px;cursor:pointer;text-align:center;font-size:12px}
+.cand:hover{border-color:var(--accent)}
+.cand.active{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.cand svg{width:100%;height:96px}
+.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:16px;padding-top:14px;border-top:1px solid var(--line2)}
+.actions .kbd{color:var(--muted);font-size:12px;margin-left:auto}
+kbd{font:11px ui-monospace,Menlo,monospace;border:1px solid #c5cad3;border-bottom-width:2px;border-radius:4px;padding:0 4px;background:#fff}
+.done-note{margin-top:12px;padding:10px 13px;border-radius:8px;background:var(--line2)}
+/* route */
+.summary{display:grid;grid-template-columns:270px minmax(0,1fr);gap:16px}
+.summary .tgt{border:1px solid var(--line2);border-radius:8px;padding:6px;text-align:center}
+.stats{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+.issues{list-style:none;margin:8px 0 0;padding:0}
+.issues li{display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-top:1px solid var(--line2);font-size:13.5px}
+.issues li .msg{flex:1;min-width:0}
+.issues li .ans{display:flex;gap:4px;flex:0 0 auto}
+.step{margin-top:14px}
+.step-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.step-no{font-weight:700;font-size:15px}
+.step-head .spacer{flex:1}
+.step.approved{border-color:#9fd3ad}
+.step.flagged{border-color:#eaa39b}
+.scheme{display:flex;align-items:center;gap:10px;overflow-x:auto;padding-bottom:4px}
+.cpd{flex:0 0 auto;width:232px;border:1px solid var(--line2);border-radius:8px;background:#fff;cursor:pointer;position:relative}
+.cpd:hover{border-color:var(--accent)}
+.cpd.edited{border-color:#e2b25a;box-shadow:0 0 0 2px var(--warn-soft)}
+.cpd.invalid{border-color:var(--bad)}
+.cpd svg{width:100%;height:auto;display:block}
+.cpd .cap{padding:5px 8px;border-top:1px solid var(--line2);font-size:12.5px;color:var(--muted);line-height:1.35}
+.cpd .cap b{color:var(--text)}
+.cpd .pen{position:absolute;top:5px;right:7px;font-size:11.5px;color:var(--muted);background:#ffffffd9;padding:0 4px;border-radius:4px}
+.plus{font-size:20px;color:var(--muted)}
+.arrow{flex:1 1 210px;min-width:190px;max-width:320px;text-align:center}
+.arrow textarea{text-align:center;font-family:inherit;font-size:13px;resize:none;overflow:hidden;display:block}
+.arrow .line{height:14px;position:relative;margin:5px 0}
+.arrow .line:before{content:"";position:absolute;left:0;right:6px;top:6px;border-top:2px solid #333}
+.arrow .line:after{content:"";position:absolute;right:0;top:1px;border-left:9px solid #333;border-top:6px solid transparent;border-bottom:6px solid transparent}
+.arrow .why{font-size:12px;color:var(--muted)}
+.sfacts{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:center;font-size:13px}
+.sfacts .lbl{color:var(--muted)}
+.footer{margin-top:16px}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(560px,96vw);background:#fff;border-left:1px solid var(--line);box-shadow:-8px 0 30px #0000001f;z-index:40;display:none;flex-direction:column}
+.drawer.open{display:flex}
+.drawer .dh{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+.drawer .dh b{font-size:15px}
+.drawer .db{padding:14px 16px;overflow:auto;flex:1}
+.drawer .df{padding:12px 16px;border-top:1px solid var(--line);display:flex;gap:8px;flex-wrap:wrap}
+.modal{position:fixed;inset:0;background:#0b0f1680;z-index:60;display:none;align-items:center;justify-content:center}
+.modal.open{display:flex}
+.modal .box{background:#fff;border-radius:12px;width:min(1180px,96vw);height:min(780px,92vh);display:flex;flex-direction:column;overflow:hidden}
+.modal .mh{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center}
+.modal iframe{flex:1;border:0;width:100%}
+.modal img{max-width:96vw;max-height:92vh;background:#fff;border-radius:8px}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#14171c;color:#fff;padding:9px 16px;border-radius:8px;font-size:13px;display:none;z-index:80;max-width:80vw}
+.muted{color:var(--muted)}
+.hidden{display:none!important}
+@media (max-width:900px){.layout{grid-template-columns:1fr}.queue{position:static;max-height:none}.panes{grid-template-columns:1fr}.summary{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 id="title">Structure review</h1>
+    <div class="sub" id="subtitle"></div>
+  </div>
+  <div class="spacer"></div>
+  <div class="progress"><span id="ptext"></span><div class="bar"><i id="pbar"></i></div></div>
+  <button id="lang" class="small" title="Language / 语言"></button>
+  <button id="bulk" class="hidden"></button>
+  <button id="finish" class="primary"></button>
+</header>
+<div id="banner"></div>
+<div id="intro"></div>
+<main id="app"></main>
+
+<aside class="drawer" id="drawer">
+  <div class="dh"><b id="dtitle"></b><span class="spacer" style="flex:1"></span><button id="dclose" class="small"></button></div>
+  <div class="db" id="dbody"></div>
+  <div class="df"><button id="dapply" class="primary"></button><button id="drevert"></button></div>
+</aside>
+
+<div class="modal" id="kmodal">
+  <div class="box">
+    <div class="mh"><b id="ktitle"></b><span class="muted" id="kstate"></span><span style="flex:1"></span>
+      <button id="kuse" class="primary"></button><button id="kclose"></button></div>
+    <iframe id="kframe" title="Ketcher"></iframe>
+  </div>
+</div>
+<div class="modal" id="imodal"><img id="iimg" alt=""></div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+const P = new URLSearchParams(location.search);
+const SID = P.get('session') || P.get('session_id'), TOKEN = P.get('token');
+const API = (P.get('api') || location.origin).replace(/\/$/, '');
+const $ = (sel, root) => (root || document).querySelector(sel);
+const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const SP = path => `/api/review-sessions/${encodeURIComponent(SID)}${path}`;
+
+const TEXT = {
+en: {
+  title_structures: 'Structure review', title_route: 'Route review',
+  sub_structures: 'Check each structure against its source, correct it if needed, then confirm.',
+  sub_route: 'Check every step. Click a structure to correct it; the audit re-runs after each change.',
+  finish: 'Finish', finish_hint: 'Finish the review; anything not reviewed is returned as skipped',
+  bulk: 'Confirm all remaining', lang: '中文',
+  progress_items: (a, b) => `${a} / ${b} reviewed`, progress_steps: (a, b) => `${a} / ${b} steps checked`,
+  source: 'Source', source_page: 'Source page', structure: 'Structure', click_hint: 'click a stereocentre to flip it',
+  formula: 'Formula', mw: 'MW', exact: 'Exact mass', centres: 'Stereo elements', undefined_n: n => `${n} undefined`, all_defined: 'all defined', charge: 'Charge',
+  rel_identical: "Same as the assistant's structure",
+  rel_diastereomers: 'Diastereomer of the assistant\'s structure', rel_enantiomers: 'Mirror image (enantiomer) of the assistant\'s structure',
+  rel_same_constitution_stereo_undefined: 'Same skeleton, stereo definition changed', rel_constitutional_isomers: 'Different connectivity (constitutional isomer)',
+  rel_tautomers: 'Tautomer of the assistant\'s structure', rel_different_formula: 'Different formula',
+  ring_fixed: 'fixed by the ring', undefined: 'undefined', clear: 'remove definition',
+  reset: 'Reset', mirror: 'Mirror', clear_all: 'Remove all stereo', indices: 'Atom numbers', draw: 'Draw…', copy: 'Copy SMILES', copied: 'SMILES copied',
+  smiles: 'SMILES (edit freely; the drawing follows)', molfile: 'Paste a Molfile', use_molfile: 'Use Molfile', invalid: 'This structure cannot be read',
+  assistant_note: 'Assistant\'s reading', assistant_question: 'Question for you', alternatives: 'Alternatives (click to use)', original: 'Assistant\'s structure',
+  comment: 'Note to the assistant (optional)', comment_ph: 'e.g. the C7 hydroxyl is hashed in the source; ring is seven-membered',
+  session_comment: 'Overall note to the assistant',
+  confirm: 'Confirm', confirm_changed: 'Confirm corrected structure', reject: 'Wrong, cannot fix here', skip: 'Skip', reopen: 'Review again',
+  shortcuts: 'Enter confirm · ↑ ↓ move · M mirror · N numbers',
+  reject_need_comment: 'Add a note saying what is wrong, so the assistant can re-read it.',
+  st_pending: 'to review', st_confirmed: 'confirmed', st_modified: 'corrected', st_skipped: 'skipped', st_rejected: 'rejected', st_error: 'error',
+  done_completed: 'Review finished. The assistant has your result; you can close this tab.',
+  done_cancelled: 'Review cancelled.', done_expired: 'This review session has expired. Ask the assistant to open a new one.',
+  load_error: 'Could not load the review session',
+  target: 'Target', final_vs_target: 'Final product vs target', audit: 'Audit', steps: 'steps', edited_n: n => `${n} structure(s) corrected`, cond_edited_n: n => `${n} condition(s) changed`,
+  step: 'Step', looks_right: 'Looks right', problem: 'Problem', edit: 'edit', edited: 'corrected', conditions_ph: 'reagents and conditions',
+  delta: 'Formula change', stereo: 'Configuration', bystanders: 'Must survive', step_comment_ph: 'Comment on this step (what is wrong, what you would do instead)',
+  issue_fine: 'Fine', issue_problem: 'Real problem', sev_blocking: 'blocking', sev_review: 'check', sev_info: 'note',
+  k_retained: n => `${n} retained`, k_inverted: 'inverted', k_inverted_unexpected: 'inverted (unexpected)', k_epimerized: 'changed without bond change', k_created: 'created',
+  k_created_undefined: 'created, undefined', k_lost_definition: 'definition lost', k_destroyed: 'destroyed', k_ambiguous: 'unclear',
+  bal_closed: 'balances', bal_consistent_with_conditions: 'explained by the conditions', bal_unexplained: 'unexplained', bal_does_not_close: 'does not balance',
+  approve: 'Approve route', needs_changes: 'Send back for changes', route_comment_ph: 'Overall comment for the assistant',
+  drawer_title: id => `Compound ${id}`, drawer_target: 'Target', apply: 'Apply to route', revert: 'Revert to assistant\'s structure', close: 'Close',
+  k_title: 'Draw the structure', k_use: 'Use this structure', k_cancel: 'Cancel', k_loading: 'loading editor…', k_ready: '', k_fail: 'The drawing editor could not be reached.',
+  relabel_identical: 'identical', relabel_enantiomers: 'enantiomer', relabel_diastereomers: 'diastereomer', relabel_same_constitution_stereo_undefined: 'stereo undefined', relabel_constitutional_isomers: 'constitutional isomer', relabel_different_formula: 'different formula', relabel_tautomers: 'tautomer',
+  status_consistent: 'consistent', status_review: 'needs checking', status_blocked: 'blocked', status_error: 'error',
+  saved: 'Saved',
+},
+zh: {
+  title_structures: '结构校对', title_route: '路线校对',
+  sub_structures: '把每个结构与来源对照，需要时直接改正，然后确认。',
+  sub_route: '逐步检查。点击结构可以改正，每次修改后自动重新核查。',
+  finish: '完成', finish_hint: '结束校对；未处理的条目按“跳过”返回',
+  bulk: '其余全部确认', lang: 'EN',
+  progress_items: (a, b) => `已校对 ${a} / ${b}`, progress_steps: (a, b) => `已检查 ${a} / ${b} 步`,
+  source: '来源图', source_page: '来源原图', structure: '结构', click_hint: '点击立体中心即可翻转',
+  formula: '分子式', mw: '分子量', exact: '精确质量', centres: '立体元素', undefined_n: n => `${n} 个未定义`, all_defined: '全部已定义', charge: '电荷',
+  rel_identical: '与助手给出的结构相同',
+  rel_diastereomers: '是助手结构的非对映异构体', rel_enantiomers: '是助手结构的镜像（对映体）',
+  rel_same_constitution_stereo_undefined: '骨架相同，立体定义有变化', rel_constitutional_isomers: '连接方式不同（构造异构体）',
+  rel_tautomers: '是助手结构的互变异构体', rel_different_formula: '分子式不同',
+  ring_fixed: '由环固定', undefined: '未定义', clear: '取消定义',
+  reset: '还原', mirror: '镜像', clear_all: '去掉全部立体', indices: '原子编号', draw: '手绘…', copy: '复制 SMILES', copied: '已复制 SMILES',
+  smiles: 'SMILES（可直接编辑，图会跟着变）', molfile: '粘贴 Molfile', use_molfile: '使用 Molfile', invalid: '无法解析这个结构',
+  assistant_note: '助手的读图说明', assistant_question: '需要你回答', alternatives: '备选结构（点击采用）', original: '助手给出的结构',
+  comment: '给助手的备注（可选）', comment_ph: '例如：原图里 C7 羟基是虚楔键；这个环是七元环',
+  session_comment: '给助手的总体备注',
+  confirm: '确认', confirm_changed: '确认改正后的结构', reject: '不对，这里改不了', skip: '跳过', reopen: '重新校对',
+  shortcuts: 'Enter 确认 · ↑ ↓ 切换 · M 镜像 · N 编号',
+  reject_need_comment: '请写一句哪里不对，方便助手重新识别。',
+  st_pending: '待校对', st_confirmed: '已确认', st_modified: '已改正', st_skipped: '已跳过', st_rejected: '已否定', st_error: '出错',
+  done_completed: '校对完成，结果已交给助手，可以关闭此页面。',
+  done_cancelled: '校对已取消。', done_expired: '本次校对已过期，请让助手重新打开。',
+  load_error: '无法载入校对会话',
+  target: '目标分子', final_vs_target: '终产物与目标', audit: '核查', steps: '步', edited_n: n => `已改正 ${n} 个结构`, cond_edited_n: n => `已修改 ${n} 处条件`,
+  step: '第', looks_right: '没问题', problem: '有问题', edit: '修改', edited: '已改正', conditions_ph: '试剂与条件',
+  delta: '分子式变化', stereo: '构型', bystanders: '须保持不变', step_comment_ph: '对这一步的意见（哪里不对、你会怎么做）',
+  issue_fine: '没问题', issue_problem: '确实有问题', sev_blocking: '阻断', sev_review: '待确认', sev_info: '提示',
+  k_retained: n => `${n} 个保持`, k_inverted: '翻转', k_inverted_unexpected: '翻转（不应发生）', k_epimerized: '无键变化却改变', k_created: '新建',
+  k_created_undefined: '新建但未定义', k_lost_definition: '定义丢失', k_destroyed: '消失', k_ambiguous: '无法判断',
+  bal_closed: '配平', bal_consistent_with_conditions: '与条件相符', bal_unexplained: '无法解释', bal_does_not_close: '不配平',
+  approve: '通过这条路线', needs_changes: '退回修改', route_comment_ph: '给助手的总体意见',
+  drawer_title: id => `化合物 ${id}`, drawer_target: '目标分子', apply: '应用到路线', revert: '恢复为助手的结构', close: '关闭',
+  k_title: '手绘结构', k_use: '使用这个结构', k_cancel: '取消', k_loading: '正在加载编辑器…', k_ready: '', k_fail: '无法连接绘图编辑器。',
+  relabel_identical: '相同', relabel_enantiomers: '对映体', relabel_diastereomers: '非对映体', relabel_same_constitution_stereo_undefined: '立体未定义', relabel_constitutional_isomers: '构造异构体', relabel_different_formula: '分子式不同', relabel_tautomers: '互变异构体',
+  status_consistent: '一致', status_review: '有待确认项', status_blocked: '有阻断问题', status_error: '出错',
+  saved: '已保存',
+}};
+let LANG = P.get('lang') || localStorage.getItem('codex-chem-review-lang') || ((navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en');
+if (!TEXT[LANG]) LANG = 'en';
+const t = (key, ...args) => { const v = TEXT[LANG][key] ?? TEXT.en[key] ?? key; return typeof v === 'function' ? v(...args) : v; };
+
+const S = { session: null, current: 0, editors: {}, drawer: null, thumbs: {} };
+
+async function call(path, body) {
+  const r = await fetch(`${API}${path}`, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Review-Token': TOKEN},
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  let j = {};
+  try { j = await r.json(); } catch (e) { /* non-JSON error */ }
+  if (!r.ok) throw new Error((j.warnings || []).join('; ') || `HTTP ${r.status}`);
+  return j;
+}
+function toast(text, ms) {
+  const el = $('#toast'); el.textContent = text; el.style.display = 'block';
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => { el.style.display = 'none'; }, ms || 2600);
+}
+const pending = () => S.session && S.session.status === 'pending';
+const assetUrl = name => `${API}${SP('/assets/' + encodeURIComponent(name))}?token=${encodeURIComponent(TOKEN)}`;
+
+/* ------------------------------------------------------------ editor */
+class Editor {
+  constructor(root, opts) {
+    this.root = root; this.original = opts.original; this.smiles = opts.smiles || opts.original;
+    this.onChange = opts.onChange || (() => {}); this.readonly = !!opts.readonly;
+    this.showIdx = false; this.d = null; this.valid = true; this.seq = 0;
+    root.innerHTML = `
+      <div class="pane"><h3>${esc(t('structure'))} <span class="hint muted">· ${esc(t('click_hint'))}</span></h3>
+        <div class="body canvas" data-r="canvas"></div></div>
+      <div class="facts" data-r="facts"></div>
+      <div class="diff" data-r="diff"></div>
+      <div class="warnbox" data-r="warn"></div>
+      <div class="chips" data-r="chips"></div>
+      <div class="tools" data-r="tools">
+        <button class="small" data-a="reset">${esc(t('reset'))}</button>
+        <button class="small" data-a="mirror">${esc(t('mirror'))}</button>
+        <button class="small" data-a="clear_all">${esc(t('clear_all'))}</button>
+        <button class="small" data-a="indices">${esc(t('indices'))}</button>
+        <button class="small" data-a="draw">${esc(t('draw'))}</button>
+        <button class="small" data-a="copy">${esc(t('copy'))}</button>
+      </div>
+      <div class="field"><label>${esc(t('smiles'))}</label><textarea rows="2" spellcheck="false" data-r="smiles"></textarea></div>
+      <details class="field"><summary class="muted" style="cursor:pointer;font-size:13px">${esc(t('molfile'))}</summary>
+        <textarea rows="5" spellcheck="false" data-r="molfile" style="margin-top:6px"></textarea>
+        <button class="small" data-a="usemol" style="margin-top:6px">${esc(t('use_molfile'))}</button></details>`;
+    this.el = name => $(`[data-r="${name}"]`, root);
+    this.el('smiles').value = this.smiles;
+    if (S.session.editor !== 'ketcher') $('[data-a="draw"]', root).classList.add('hidden');
+    root.addEventListener('click', e => {
+      const b = e.target.closest('[data-a]'); if (!b || this.readonly) return;
+      const a = b.dataset.a;
+      if (a === 'reset') this.load(this.original);
+      else if (a === 'mirror') this.edit('mirror');
+      else if (a === 'clear_all') this.edit('clear_all');
+      else if (a === 'indices') { this.showIdx = !this.showIdx; b.classList.toggle('on', this.showIdx); this.load(this.smiles); }
+      else if (a === 'draw') openKetcher(this);
+      else if (a === 'copy') { navigator.clipboard && navigator.clipboard.writeText(this.smiles); toast(t('copied')); }
+      else if (a === 'usemol') this.load(null, this.el('molfile').value);
+      else if (a === 'set') this.edit('set', b.dataset.target, b.dataset.value);
+      else if (a === 'clear') this.edit('clear', b.dataset.target);
+    });
+    let timer = null;
+    this.el('smiles').addEventListener('input', () => {
+      clearTimeout(timer); timer = setTimeout(() => this.load(this.el('smiles').value.trim(), null, true), 350);
+    });
+    this.setReadonly(this.readonly);
+    this.load(this.smiles);
+  }
+  setReadonly(flag) {
+    this.readonly = flag;
+    $$('button,textarea', this.root).forEach(x => { x.disabled = flag; });
+  }
+  options() { return {reference: this.original, show_indices: this.showIdx, width: 470, height: 330}; }
+  async load(smiles, molfile, typed) {
+    const seq = ++this.seq;
+    let d;
+    try { d = await call(SP('/describe'), {smiles, molfile, ...this.options()}); }
+    catch (e) { toast(e.message); return; }
+    if (seq !== this.seq) return;
+    this.apply(d, typed);
+  }
+  async edit(op, target, value) {
+    if (!this.valid) return;
+    const seq = ++this.seq;
+    let d;
+    try { d = await call(SP('/edit'), {smiles: this.smiles, op, target, value, ...this.options()}); }
+    catch (e) { toast(e.message); return; }
+    if (seq !== this.seq) return;
+    if (d.status !== 'ok') { toast((d.warnings || []).join(' ')); return; }
+    this.apply(d, false);
+  }
+  apply(d, typed) {
+    if (d.status !== 'ok') {
+      this.valid = false;
+      this.el('warn').className = 'warnbox err';
+      this.el('warn').textContent = `${t('invalid')}: ${(d.warnings || []).join(' ')}`;
+      this.onChange(this); return;
+    }
+    this.valid = true; this.d = d; this.smiles = d.smiles;
+    if (!typed) this.el('smiles').value = d.smiles;
+    this.paint(); this.onChange(this);
+  }
+  changed() { return !!(this.d && this.d.versus_reference && this.d.versus_reference.relation !== 'identical'); }
+  paint() {
+    const d = this.d, canvas = this.el('canvas');
+    canvas.innerHTML = d.svg;
+    const byAtom = {};
+    for (const e of d.stereo) {
+      if (e.constrained) continue;
+      for (const a of e.atoms) if (!(a in byAtom) || e.kind === 'tetrahedral') byAtom[a] = e;
+    }
+    $$('.atom-selector', canvas).forEach(c => {
+      const m = /atom-(\d+)/.exec(c.getAttribute('class')); if (!m) return;
+      const e = byAtom[Number(m[1])]; if (!e) return;
+      c.dataset.el = e.id;
+      if (this.readonly) return;
+      c.classList.add('live');
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      title.textContent = `${e.name}${e.cip ? ' (' + e.cip + ')' : ''}`; c.appendChild(title);
+      c.addEventListener('click', () => this.edit('invert', e.id));
+    });
+    const und = d.n_undefined;
+    this.el('facts').innerHTML = `
+      <span>${esc(t('formula'))} <b>${esc(d.formula)}</b></span>
+      <span>${esc(t('mw'))} <b>${d.mol_weight}</b></span>
+      <span>${esc(t('exact'))} <b>${d.exact_mass}</b></span>
+      ${d.charge ? `<span>${esc(t('charge'))} <b>${d.charge > 0 ? '+' : ''}${d.charge}</b></span>` : ''}
+      <span>${esc(t('centres'))} <b>${d.n_stereo_elements}</b> · ${und ? `<b style="color:var(--bad)">${esc(t('undefined_n', und))}</b>` : esc(t('all_defined'))}</span>`;
+    const v = d.versus_reference, diff = this.el('diff');
+    if (!v) { diff.className = 'diff'; diff.textContent = ''; }
+    else {
+      const major = ['constitutional_isomers', 'different_formula', 'tautomers'].includes(v.relation);
+      diff.className = 'diff ' + (v.relation === 'identical' ? 'same' : major ? 'major' : 'changed');
+      let text = t('rel_' + v.relation);
+      const extra = [...(v.details || [])];
+      if (v.formula_delta) extra.push(v.formula_delta);
+      if (extra.length) text += ` — ${extra.join(', ')}`;
+      diff.textContent = text;
+    }
+    const others = (d.warnings || []).filter(w => !/not defined/.test(w));
+    this.el('warn').className = 'warnbox'; this.el('warn').textContent = others.join(' ');
+    this.el('chips').innerHTML = d.stereo.map(e => {
+      if (e.constrained) return `<span class="chip"><span class="nm">${esc(e.name)}</span><span class="muted">${esc(t('ring_fixed'))}</span></span>`;
+      const pair = e.kind === 'tetrahedral' ? ['R', 'S'] : ['E', 'Z'];
+      const cur = (e.cip || '').toUpperCase();
+      const btn = x => `<button class="small ${cur === x ? 'on' : ''}" data-a="set" data-target="${e.id}" data-value="${x}">${x}</button>`;
+      return `<span class="chip ${e.specified ? '' : 'open'}" data-el="${e.id}"><span class="nm">${esc(e.name)}</span>
+        ${e.specified ? '' : `<span style="color:var(--bad);font-size:12px">${esc(t('undefined'))}</span>`}
+        ${btn(pair[0])}${btn(pair[1])}
+        ${e.specified ? `<button class="x" title="${esc(t('clear'))}" data-a="clear" data-target="${e.id}">×</button>` : ''}</span>`;
+    }).join('');
+    $$('.chip[data-el]', this.root).forEach(chip => {
+      const glow = on => $$(`.atom-selector[data-el="${chip.dataset.el}"]`, canvas).forEach(c => c.classList.toggle('glow', on));
+      chip.addEventListener('mouseenter', () => glow(true)); chip.addEventListener('mouseleave', () => glow(false));
+    });
+    if (this.readonly) this.setReadonly(true);
+  }
+}
+
+/* ---------------------------------------------------------- Ketcher */
+let ketcherFor = null;
+function ketcherInstance() { try { return $('#kframe').contentWindow.ketcher || null; } catch (e) { return null; } }
+async function openKetcher(editor) {
+  ketcherFor = editor;
+  $('#kmodal').classList.add('open'); $('#kstate').textContent = t('k_loading'); $('#kuse').disabled = true;
+  const frame = $('#kframe');
+  if (!frame.getAttribute('src')) frame.setAttribute('src', `${S.session.ketcher_url || API}/ketcher/?embed=1`);
+  let k = null;
+  for (let i = 0; i < 150 && !k; i++) { k = ketcherInstance(); if (!k) await new Promise(r => setTimeout(r, 200)); }
+  if (!k) { $('#kstate').textContent = t('k_fail'); return; }
+  try {
+    await k.setMolecule(editor.valid ? editor.smiles : '');
+    $('#kstate').textContent = t('k_ready'); $('#kuse').disabled = false;
+  } catch (e) { $('#kstate').textContent = String(e.message || e); $('#kuse').disabled = false; }
+}
+async function useKetcher() {
+  const k = ketcherInstance(); if (!k || !ketcherFor) return;
+  let smiles = '', molfile = '';
+  try { smiles = await k.getSmiles(); } catch (e) { /* fall back to Molfile */ }
+  try { molfile = await k.getMolfile(); } catch (e) { /* SMILES only */ }
+  $('#kmodal').classList.remove('open');
+  await ketcherFor.load(smiles || null, smiles ? null : molfile);
+}
+
+/* ------------------------------------------------------- structures */
+function itemStatus(item) { return item.status || 'pending'; }
+function progressStructures() {
+  const items = S.session.items, done = items.filter(i => itemStatus(i) !== 'pending').length;
+  $('#ptext').textContent = t('progress_items', done, items.length);
+  $('#pbar').style.width = `${items.length ? 100 * done / items.length : 0}%`;
+}
+async function thumb(smiles) {
+  if (!(smiles in S.thumbs)) {
+    S.thumbs[smiles] = call(SP('/describe'), {smiles, width: 150, height: 110}).then(d => d.svg || '').catch(() => '');
+  }
+  return S.thumbs[smiles];
+}
+// what the queue shows for an item: the edit in progress, else the saved result
+function queueSmiles(item) {
+  const ed = itemStatus(item) === 'pending' ? S.editors[item.id] : null;
+  return ed && ed.valid ? ed.smiles : (item.isomeric_smiles || item.smiles || item.input_smiles);
+}
+async function refreshThumb(index) {
+  const item = S.session.items[index]; if (!item) return;
+  const svg = await thumb(queueSmiles(item));
+  const cell = $(`[data-thumb="${index}"]`); if (cell) cell.innerHTML = svg;
+}
+function renderQueue() {
+  const host = $('#queue'); if (!host) return;
+  host.innerHTML = S.session.items.map((item, i) => `
+    <div class="q ${i === S.current ? 'active' : ''}" data-i="${i}">
+      <div class="thumb" data-thumb="${i}"></div>
+      <div class="qt"><div class="ql">${esc(item.label || item.id)}</div>
+        <span class="pill ${itemStatus(item)}">${esc(t('st_' + itemStatus(item)))}</span></div>
+    </div>`).join('') + `
+    <div class="qnote"><label>${esc(t('session_comment'))}</label>
+      <textarea class="prose" rows="3" id="scomment" ${pending() ? '' : 'disabled'}>${esc(S.session.comment || '')}</textarea></div>`;
+  S.session.items.forEach(async (item, i) => {
+    const svg = await thumb(queueSmiles(item));
+    const cell = $(`[data-thumb="${i}"]`, host); if (cell) cell.innerHTML = svg;
+  });
+  $$('.q', host).forEach(q => q.addEventListener('click', () => { S.current = Number(q.dataset.i); renderStructures(); }));
+  const sc = $('#scomment');
+  if (sc) sc.addEventListener('change', () => {
+    S.session.comment = sc.value;
+    call(SP('/comment'), {comment: sc.value}).then(() => toast(t('saved'), 1200)).catch(e => toast(e.message));
+  });
+}
+function renderStructures() {
+  const app = $('#app');
+  if (!$('#queue')) {
+    const pages = (S.session.images || []).map(name => `<img src="${assetUrl(name)}" alt="source page" data-zoom style="max-width:100%;max-height:520px;cursor:zoom-in;border:1px solid var(--line2);border-radius:6px">`).join('');
+    app.innerHTML = `${pages ? `<details class="card" style="margin-bottom:14px" open><summary style="cursor:pointer;font-weight:600">${esc(t('source_page'))}</summary><div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap" id="pages">${pages}</div></details>` : ''}
+      <div class="layout"><div class="queue" id="queue"></div><div id="item"></div></div>`;
+    $$('#pages [data-zoom]').forEach(img => img.addEventListener('click', () => { $('#iimg').src = img.src; $('#imodal').classList.add('open'); }));
+  }
+  renderQueue(); progressStructures();
+  const item = S.session.items[S.current], host = $('#item');
+  if (!item) { host.innerHTML = ''; return; }
+  const status = itemStatus(item), open = status === 'pending' && pending();
+  const smiles = status === 'pending' ? (S.editors[item.id] ? S.editors[item.id].smiles : item.input_smiles)
+    : (item.isomeric_smiles || item.reviewed_smiles || item.input_smiles);
+  const savedComment = S.editors[item.id] ? S.editors[item.id].comment || '' : (item.comment || '');
+  host.innerHTML = `<div class="card">
+    <div class="item-head"><h2>${esc(item.label || item.id)}</h2>
+      <span class="pill ${status}">${esc(t('st_' + status))}</span>
+      ${item.source ? `<span class="src">${esc(item.source)}</span>` : ''}</div>
+    ${item.question ? `<div class="callout q" style="margin-top:0;margin-bottom:12px"><div class="who">${esc(t('assistant_question'))}</div>${esc(item.question)}</div>` : ''}
+    <div class="panes ${item.image ? '' : 'single'}">
+      ${item.image ? `<div><div class="pane"><h3>${esc(t('source'))}</h3><div class="body"><img src="${assetUrl(item.image)}" alt="source" data-zoom></div></div>
+        ${item.note ? `<div class="callout"><div class="who">${esc(t('assistant_note'))}</div>${esc(item.note)}</div>` : ''}</div>` : ''}
+      <div><div id="editor"></div></div>
+    </div>
+    ${!item.image && item.note ? `<div class="callout"><div class="who">${esc(t('assistant_note'))}</div>${esc(item.note)}</div>` : ''}
+    ${(item.candidates || []).length ? `<div class="field"><label>${esc(t('alternatives'))}</label><div class="cands" id="cands"></div></div>` : ''}
+    <div class="field"><label>${esc(t('comment'))}</label>
+      <textarea class="prose" rows="2" id="icomment" placeholder="${esc(t('comment_ph'))}" ${open ? '' : 'disabled'}>${esc(savedComment)}</textarea></div>
+    ${open ? `<div class="actions">
+        <button class="ok" id="aconfirm">${esc(t('confirm'))}</button>
+        <button class="danger" id="areject">${esc(t('reject'))}</button>
+        <button id="askip">${esc(t('skip'))}</button>
+        <span class="kbd">${esc(t('shortcuts'))}</span></div>`
+      : `<div class="actions">${pending() ? `<button id="areopen">${esc(t('reopen'))}</button>` : ''}
+        ${(item.warnings || []).length ? `<span class="muted" style="font-size:12.5px">${esc(item.warnings.join(' '))}</span>` : ''}</div>`}
+  </div>`;
+  const editor = new Editor($('#editor'), {
+    original: item.input_smiles, smiles, readonly: !open,
+    onChange: ed => {
+      if (ed.valid && S.editors[item.id] === ed) refreshThumb(S.session.items.indexOf(item));
+      const b = $('#aconfirm'); if (!b) return;
+      b.textContent = ed.changed() ? t('confirm_changed') : t('confirm'); b.disabled = !ed.valid;
+      $$('.cand').forEach(c => c.classList.toggle('active', !!ed.d && c.dataset.canon === ed.d.canonical_smiles));
+    },
+  });
+  editor.comment = savedComment;
+  if (open) S.editors[item.id] = editor;
+  const cands = $('#cands');
+  if (cands) {
+    const list = [{label: t('original'), smiles: item.input_smiles}, ...item.candidates];
+    list.forEach(async c => {
+      const d = await call(SP('/describe'), {smiles: c.smiles, width: 150, height: 100}).catch(() => ({}));
+      const el = document.createElement('div'); el.className = 'cand'; el.dataset.canon = d.canonical_smiles || '';
+      el.innerHTML = `${d.svg || ''}<div>${esc(c.label)}</div>`;
+      if (open) el.addEventListener('click', () => editor.load(c.smiles));
+      cands.appendChild(el);
+      if (editor.d) el.classList.toggle('active', el.dataset.canon === editor.d.canonical_smiles);
+    });
+  }
+  const ic = $('#icomment'); if (ic) ic.addEventListener('input', () => { editor.comment = ic.value; });
+  const zoom = $('[data-zoom]', host); if (zoom) zoom.addEventListener('click', () => { $('#iimg').src = zoom.src; $('#imodal').classList.add('open'); });
+  if (open) {
+    $('#aconfirm').addEventListener('click', () => submitItem(item, editor, 'confirmed'));
+    $('#askip').addEventListener('click', () => submitItem(item, editor, 'skipped'));
+    $('#areject').addEventListener('click', () => {
+      if (!(editor.comment || '').trim()) { toast(t('reject_need_comment'), 4000); $('#icomment').focus(); return; }
+      submitItem(item, editor, 'rejected');
+    });
+  } else if ($('#areopen')) {
+    $('#areopen').addEventListener('click', async () => {
+      try { S.session = await call(SP('/items/' + encodeURIComponent(item.id)), {status: 'pending'}); delete S.editors[item.id]; renderAll(); }
+      catch (e) { toast(e.message); }
+    });
+  }
+}
+async function submitItem(item, editor, mode) {
+  const body = {status: mode, comment: editor.comment || ''};
+  if (mode === 'confirmed') { body.reviewed_smiles = editor.smiles; body.status = editor.changed() ? 'modified' : 'confirmed'; }
+  try { S.session = await call(SP('/items/' + encodeURIComponent(item.id)), body); }
+  catch (e) { toast(e.message); return; }
+  delete S.editors[item.id];
+  const next = S.session.items.findIndex((x, i) => i > S.current && itemStatus(x) === 'pending');
+  const any = S.session.items.findIndex(x => itemStatus(x) === 'pending');
+  if (next >= 0) S.current = next; else if (any >= 0) S.current = any;
+  renderAll();
+}
+async function confirmRemaining() {
+  for (const item of S.session.items) {
+    if (itemStatus(item) !== 'pending' || !pending()) continue;
+    const ed = S.editors[item.id];
+    const body = ed && ed.valid
+      ? {status: ed.changed() ? 'modified' : 'confirmed', reviewed_smiles: ed.smiles, comment: ed.comment || ''}
+      : {status: 'confirmed', reviewed_smiles: item.input_smiles};
+    try { S.session = await call(SP('/items/' + encodeURIComponent(item.id)), body); } catch (e) { toast(e.message); break; }
+  }
+  S.editors = {}; renderAll();
+}
+
+/* ------------------------------------------------------------ route */
+function relPill(relation) {
+  if (!relation) return '';
+  const cls = relation === 'identical' ? 'ok' : (relation === 'enantiomers' || relation === 'diastereomers' || relation === 'same_constitution_stereo_undefined') ? 'warn' : 'bad';
+  return `<span class="pill ${cls}">${esc(t('relabel_' + relation))}</span>`;
+}
+function cpdCard(id, svgOverride) {
+  const r = S.session.route, c = id === '__target__' ? r.target : r.compounds[id];
+  if (!c) return `<div class="cpd invalid" style="cursor:default"><div class="cap"><b>${esc(id)}</b></div></div>`;
+  return `<div class="cpd ${c.changed ? 'edited' : ''} ${c.status !== 'ok' ? 'invalid' : ''}" data-cid="${esc(id)}">
+    ${pending() ? `<span class="pen">✎ ${esc(t('edit'))}</span>` : ''}
+    ${svgOverride || c.svg || `<div style="padding:30px 8px;color:var(--bad)">${esc((c.warnings || []).join(' '))}</div>`}
+    <div class="cap"><b>${esc(id === '__target__' ? t('target') : id)}</b> ${esc(id === '__target__' ? '' : c.name || '')}
+      ${c.changed ? `<span class="pill warn">${esc(t('edited'))}</span>` : ''}<br>
+      ${esc(c.formula || '')}${c.mol_weight ? ' · ' + c.mol_weight : ''}${c.n_undefined ? ` · <span style="color:var(--bad)">${esc(t('undefined_n', c.n_undefined))}</span>` : ''}</div>
+  </div>`;
+}
+function stepCard(s) {
+  const sev = x => `<span class="pill ${x === 'blocking' ? 'blocking' : x === 'review' ? 'review' : 'info'}">${esc(t('sev_' + x))}</span>`;
+  const stereo = s.stereo.map(k => {
+    const name = k.kind === 'retained' ? t('k_retained', k.n) : `${t('k_' + k.kind)}${(k.details || []).length ? ': ' + k.details.join(', ') : ` ×${k.n}`}`;
+    const cls = k.kind === 'retained' ? 'ok' : (k.kind === 'inverted' || k.kind === 'created' || k.kind === 'destroyed') ? 'warn' : 'bad';
+    return `<span class="pill ${cls}">${esc(name)}</span>`;
+  }).join(' ');
+  const balCls = (s.balance.status === 'closed' || s.balance.status === 'consistent_with_conditions') ? 'ok' : s.balance.status ? 'warn' : '';
+  const balText = s.balance.status ? (TEXT[LANG]['bal_' + s.balance.status] || s.balance.status.replace(/_/g, ' ')) : '';
+  const bystanders = Object.entries(s.bystanders || {}).map(([k, n]) => `${k.replace(/_/g, ' ')}${n > 1 ? ' ×' + n : ''}`).join(', ');
+  const dis = pending() ? '' : 'disabled';
+  return `<section class="card step ${s.decision || ''}" data-step="${esc(s.key)}">
+    <div class="step-head"><span class="step-no">${LANG === 'zh' ? `第 ${esc(s.key)} 步` : `${esc(t('step'))} ${esc(s.key)}`}</span>
+      ${s.conditions_changed ? `<span class="pill warn" title="${esc(s.original_conditions || '')}">${esc(t('edited'))}</span>` : ''}
+      <span class="spacer"></span>
+      <button class="small ${s.decision === 'approved' ? 'on good' : ''}" data-decision="approved" ${dis}>✓ ${esc(t('looks_right'))}</button>
+      <button class="small ${s.decision === 'flagged' ? 'on badc' : ''}" data-decision="flagged" ${dis}>⚑ ${esc(t('problem'))}</button></div>
+    <div class="scheme">
+      ${s.reactants.map(r => cpdCard(r)).join('<span class="plus">+</span>')}
+      <div class="arrow"><textarea rows="1" data-cond placeholder="${esc(t('conditions_ph'))}" ${dis}>${esc(s.conditions)}</textarea>
+        <div class="line"></div><div class="why">${esc(s.why)}</div></div>
+      ${cpdCard(s.product, s.product_svg)}
+    </div>
+    <div class="sfacts">
+      ${s.balance.delta ? `<span class="lbl">${esc(t('delta'))}</span> <b>${esc(s.balance.delta)}</b> <span class="pill ${balCls}">${esc(balText)}</span>
+        ${(s.balance.matches || []).length ? `<span class="muted">${esc(s.balance.matches.join('; '))}</span>` : ''}` : ''}
+      ${stereo ? `<span class="lbl" style="margin-left:8px">${esc(t('stereo'))}</span> ${stereo}` : ''}
+    </div>
+    ${bystanders ? `<div class="sfacts"><span class="lbl">${esc(t('bystanders'))}</span> <span class="muted">${esc(bystanders)}</span></div>` : ''}
+    ${s.issues.length ? `<ul class="issues">${s.issues.map(i => `<li>${sev(i.severity)}<span class="msg">${esc(i.message)}</span>
+        <span class="ans"><button class="small ${i.answer === 'fine' ? 'on good' : ''}" data-issue="${esc(i.key)}" data-answer="fine" ${dis}>${esc(t('issue_fine'))}</button>
+        <button class="small ${i.answer === 'problem' ? 'on badc' : ''}" data-issue="${esc(i.key)}" data-answer="problem" ${dis}>${esc(t('issue_problem'))}</button></span></li>`).join('')}</ul>` : ''}
+    <div class="field"><input type="text" class="prose" data-comment value="${esc(s.comment || '')}" placeholder="${esc(t('step_comment_ph'))}" ${dis}></div>
+  </section>`;
+}
+function renderRoute() {
+  const r = S.session.route, app = $('#app'), y = window.scrollY;
+  const checked = r.steps.filter(s => s.decision).length;
+  $('#ptext').textContent = t('progress_steps', checked, r.steps.length);
+  $('#pbar').style.width = `${r.steps.length ? 100 * checked / r.steps.length : 0}%`;
+  const statusCls = r.status === 'consistent' ? 'ok' : r.status === 'review' ? 'warn' : 'bad';
+  const dis = pending() ? '' : 'disabled';
+  app.innerHTML = `
+    <div class="card summary">
+      <div>${r.target ? cpdCard('__target__') : ''}
+        ${(S.session.images || []).map(name => `<div class="tgt" style="margin-top:10px"><img src="${assetUrl(name)}" alt="source" data-zoom style="max-width:100%;max-height:220px;cursor:zoom-in"><div class="muted" style="font-size:12px">${esc(t('source'))}</div></div>`).join('')}</div>
+      <div>
+        ${r.title ? `<h2 style="margin:0 0 8px;font-size:17px">${esc(r.title)}</h2>` : ''}
+        <div class="stats">
+          <span class="pill ${statusCls}">${esc(t('audit'))}: ${esc(TEXT[LANG]['status_' + r.status] || r.status || '')}${r.n_blocking ? ` · ${r.n_blocking} ${esc(t('sev_blocking'))}` : ''}${r.n_review ? ` · ${r.n_review} ${esc(t('sev_review'))}` : ''}</span>
+          ${r.final_vs_target ? `<span class="pill">${esc(t('final_vs_target'))}</span>${relPill(r.final_vs_target)}` : ''}
+          <span class="pill">${r.n_steps} ${esc(t('steps'))}</span>
+          ${r.n_edited_compounds ? `<span class="pill warn">${esc(t('edited_n', r.n_edited_compounds))}</span>` : ''}
+          ${r.n_edited_conditions ? `<span class="pill warn">${esc(t('cond_edited_n', r.n_edited_conditions))}</span>` : ''}
+        </div>
+        ${r.route_issues.length ? `<ul class="issues">${r.route_issues.map(i => `<li><span class="pill ${i.severity === 'blocking' ? 'blocking' : i.severity === 'review' ? 'review' : 'info'}">${esc(t('sev_' + i.severity))}</span><span class="msg">${esc(i.message)}</span></li>`).join('')}</ul>` : ''}
+        <div class="muted" style="font-size:12.5px;margin-top:8px">${esc(r.scope || '')}</div>
+      </div>
+    </div>
+    ${r.steps.map(stepCard).join('')}
+    <div class="card footer">
+      <div class="field" style="margin-top:0"><label>${esc(t('session_comment'))}</label>
+        <textarea class="prose" rows="3" id="rcomment" placeholder="${esc(t('route_comment_ph'))}" ${dis}>${esc(S.session.comment || r.comment || '')}</textarea></div>
+      <div class="actions"><button class="ok" id="rapprove" ${dis}>${esc(t('approve'))}</button>
+        <button class="danger" id="rback" ${dis}>${esc(t('needs_changes'))}</button></div>
+    </div>`;
+  window.scrollTo(0, y);
+  $$('[data-cond]', app).forEach(fitHeight);
+  $$('.summary [data-zoom]', app).forEach(img => img.addEventListener('click', () => { $('#iimg').src = img.src; $('#imodal').classList.add('open'); }));
+  if (!pending()) return;
+  $$('.cpd[data-cid]', app).forEach(c => c.addEventListener('click', () => openDrawer(c.dataset.cid)));
+  $$('[data-step]', app).forEach(sec => {
+    const key = sec.dataset.step, step = r.steps.find(s => s.key === key);
+    const send = body => call(SP('/route/step'), {key, ...body}).then(d => { S.session = d; renderRoute(); }).catch(e => toast(e.message));
+    $$('[data-decision]', sec).forEach(b => b.addEventListener('click', () => send({decision: step.decision === b.dataset.decision ? '' : b.dataset.decision})));
+    const cond = $('[data-cond]', sec);
+    cond.addEventListener('change', () => { if (cond.value !== step.conditions) send({conditions: cond.value}); });
+    cond.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); cond.blur(); } });
+    cond.addEventListener('input', () => fitHeight(cond));
+    const com = $('[data-comment]', sec);
+    com.addEventListener('change', () => { step.comment = com.value; call(SP('/route/step'), {key, comment: com.value}).catch(e => toast(e.message)); });
+    $$('[data-issue]', sec).forEach(b => b.addEventListener('click', () => {
+      const issue = step.issues.find(i => i.key === b.dataset.issue);
+      call(SP('/route/issue'), {key: b.dataset.issue, answer: issue.answer === b.dataset.answer ? '' : b.dataset.answer})
+        .then(d => { S.session = d; renderRoute(); }).catch(e => toast(e.message));
+    }));
+  });
+  const rc = $('#rcomment');
+  rc.addEventListener('change', () => { S.session.comment = rc.value; call(SP('/comment'), {comment: rc.value}).catch(e => toast(e.message)); });
+  const finish = verdict => call(SP('/complete'), {verdict, comment: rc.value}).then(d => { S.session = d; closeDrawer(); renderAll(); }).catch(e => toast(e.message));
+  $('#rapprove').addEventListener('click', () => finish('approved'));
+  $('#rback').addEventListener('click', () => finish('needs_changes'));
+}
+function fitHeight(area) { area.style.height = 'auto'; area.style.height = `${area.scrollHeight + 2}px`; }
+function openDrawer(cid) {
+  const r = S.session.route, c = cid === '__target__' ? r.target : r.compounds[cid]; if (!c) return;
+  $('#dtitle').textContent = cid === '__target__' ? t('drawer_target') : `${t('drawer_title', cid)}${c.name ? ' · ' + c.name : ''}`;
+  $('#dbody').innerHTML = '<div id="deditor"></div>';
+  const editor = new Editor($('#deditor'), {original: c.original_smiles, smiles: c.status === 'ok' ? c.smiles : c.original_smiles,
+    onChange: ed => { $('#dapply').disabled = !ed.valid; }});
+  S.drawer = {cid, editor};
+  $('#drevert').classList.toggle('hidden', !c.changed);
+  $('#drawer').classList.add('open');
+}
+function closeDrawer() { $('#drawer').classList.remove('open'); S.drawer = null; }
+
+/* ------------------------------------------------------------ shell */
+function renderAll() {
+  const s = S.session, route = s.kind === 'route';
+  document.documentElement.lang = LANG === 'zh' ? 'zh-CN' : 'en';
+  document.title = s.title || t(route ? 'title_route' : 'title_structures');
+  $('#title').textContent = s.title || t(route ? 'title_route' : 'title_structures');
+  $('#subtitle').textContent = t(route ? 'sub_route' : 'sub_structures');
+  $('#lang').textContent = t('lang');
+  $('#finish').textContent = t('finish'); $('#finish').title = t('finish_hint');
+  $('#finish').classList.toggle('hidden', route || !pending());
+  $('#bulk').textContent = t('bulk');
+  $('#bulk').classList.toggle('hidden', route || !pending() || s.items.filter(i => itemStatus(i) === 'pending').length < 2);
+  $('#dclose').textContent = t('close'); $('#dapply').textContent = t('apply'); $('#drevert').textContent = t('revert');
+  $('#ktitle').textContent = t('k_title'); $('#kuse').textContent = t('k_use'); $('#kclose').textContent = t('k_cancel');
+  const intro = $('#intro');
+  intro.style.display = s.intro ? 'block' : 'none'; intro.textContent = s.intro || '';
+  const banner = $('#banner');
+  if (pending()) banner.style.display = 'none';
+  else {
+    banner.style.display = 'block'; banner.className = s.status === 'completed' ? '' : 'bad';
+    banner.textContent = t('done_' + s.status) || s.status;
+  }
+  if (route) renderRoute(); else renderStructures();
+}
+$('#lang').addEventListener('click', () => {
+  LANG = LANG === 'zh' ? 'en' : 'zh'; localStorage.setItem('codex-chem-review-lang', LANG);
+  $('#app').innerHTML = ''; S.editors = {}; closeDrawer(); renderAll();
+});
+$('#finish').addEventListener('click', () => call(SP('/complete'), {comment: S.session.comment || ''}).then(d => { S.session = d; S.editors = {}; renderAll(); }).catch(e => toast(e.message)));
+$('#bulk').addEventListener('click', confirmRemaining);
+$('#dclose').addEventListener('click', closeDrawer);
+$('#dapply').addEventListener('click', () => {
+  if (!S.drawer) return;
+  call(SP('/route/compound'), {id: S.drawer.cid, smiles: S.drawer.editor.smiles})
+    .then(d => { S.session = d; closeDrawer(); renderRoute(); }).catch(e => toast(e.message));
+});
+$('#drevert').addEventListener('click', () => {
+  if (!S.drawer) return;
+  call(SP('/route/reset'), {id: S.drawer.cid}).then(d => { S.session = d; closeDrawer(); renderRoute(); }).catch(e => toast(e.message));
+});
+$('#kuse').addEventListener('click', useKetcher);
+$('#kclose').addEventListener('click', () => $('#kmodal').classList.remove('open'));
+$('#imodal').addEventListener('click', () => $('#imodal').classList.remove('open'));
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { $('#imodal').classList.remove('open'); if (!$('#kmodal').classList.contains('open')) closeDrawer(); return; }
+  if (!S.session || S.session.kind === 'route' || !pending() || $('#kmodal').classList.contains('open')) return;
+  if (/^(TEXTAREA|INPUT|SELECT)$/.test(document.activeElement.tagName) || e.metaKey || e.ctrlKey || e.altKey) return;
+  const item = S.session.items[S.current], ed = item && S.editors[item.id];
+  if (e.key === 'ArrowDown' || e.key === 'j') { S.current = Math.min(S.current + 1, S.session.items.length - 1); renderStructures(); e.preventDefault(); }
+  else if (e.key === 'ArrowUp' || e.key === 'k') { S.current = Math.max(S.current - 1, 0); renderStructures(); e.preventDefault(); }
+  else if (e.key === 'Enter' && ed && ed.valid) { submitItem(item, ed, 'confirmed'); e.preventDefault(); }
+  else if ((e.key === 'm' || e.key === 'M') && ed) ed.edit('mirror');
+  else if ((e.key === 'n' || e.key === 'N') && ed) $('[data-a="indices"]', ed.root).click();
+});
+
+(async function start() {
+  if (!SID || !TOKEN) { $('#banner').style.display = 'block'; $('#banner').className = 'bad'; $('#banner').textContent = t('load_error'); return; }
+  try { S.session = await call(SP('') + '?view=page'); }
+  catch (e) { $('#banner').style.display = 'block'; $('#banner').className = 'bad'; $('#banner').textContent = `${t('load_error')}: ${e.message}`; return; }
+  if (S.session.language && TEXT[S.session.language] && !P.get('lang') && !localStorage.getItem('codex-chem-review-lang')) LANG = S.session.language;
+  const first = S.session.items.findIndex(i => itemStatus(i) === 'pending'); if (first > 0) S.current = first;
+  renderAll();
+})();
+</script>
+</body>
+</html>

@@ -1,461 +1,310 @@
 # Codex Organic Chemistry Assistant
 
-Local open-source toolchain for helping Codex reason about organic chemistry.
-It gives Codex deterministic tools for:
+**English** · [中文](README.zh-CN.md)
 
-- molecule/reaction image parsing with OCSR adapters and human-review warnings,
-- RDKit structure normalization, drawing, descriptors, conformers, and charges,
-- optional Open Babel, xTB, and CREST integration when binaries are installed,
-- rule-based reaction sanity checks, retrosynthesis hints, condition families, and mechanism drafts,
-- synchronized Codex and Claude Code skills plus an MCP server exposing the same workflow.
+A local toolchain that lets an AI assistant check organic chemistry at the
+level of structures. The model reasons first. Then it tries to break its own
+answer with checks whose result differs between a right and a wrong structure,
+route or count. Structures read from images and routes about to be acted on go
+to a chemist on a review page. The final structures can be drawn as route and
+mechanism figures.
 
-This is a research assistant, not an experimental safety authority. Treat all
-synthetic, mechanistic, and computational suggestions as hypotheses requiring
-literature review and expert validation.
+It ships as a Python package (CLI, MCP server and kit), a skill for Claude Code
+and Codex, and a browser review workbench.
 
-## Repository Contents
+<p align="center">
+  <img src="docs/images/review-structures.en.png" width="860" alt="Review workbench: the source drawing of compound 2 beside the assistant's reading, after the reviewer flipped the C4 stereocentre to match the source">
+  <br>
+  <sub>The review workbench. The C4 hydroxyl was misread as a hash; one click on the centre fixed it, and the page states how the edit relates to the original. <a href="docs/images/review-structures.zh.png">中文界面</a></sub>
+</p>
 
-- `.agents/skills/organic-chemistry-assistant`: the Codex skill instructions and
-  UI metadata.
-- `.claude/skills/organic-chemistry-assistant`: the same skill for Claude Code
-  (kept in sync with the `.agents` copy).
-- `src/codex_organic_chem`: the local Python CLI/MCP implementation used by the
-  skill.
-- `integrations/ketcher`: optional Ketcher review UI source; build artifacts are
-  intentionally not committed.
-- `integrations/chemdoodle`: optional ChemDoodle Web Components viewer files.
+> This is a research assistant, not a safety authority. Treat synthetic,
+> mechanistic and computational suggestions as hypotheses that need literature
+> review and expert validation.
 
-See [DEPENDENCIES.md](DEPENDENCIES.md) for the complete dependency map,
-including Python, MCP, optional chemistry binaries, editor integrations, npm
-packages, environment variables, and third-party licensing notes.
-See [CHANGELOG.md](CHANGELOG.md) for the current unreleased improvements.
+**Contents:**
+[What is in the box](#what-is-in-the-box) ·
+[How the pieces work together](#how-the-pieces-work-together) ·
+[Features](#features) ·
+[Benchmarks](#benchmarks) ·
+[Quick start](#quick-start) ·
+[Claude Code and Codex](#using-it-from-claude-code-or-codex) ·
+[Documentation](#documentation) ·
+[Repository layout](#repository-layout) ·
+[License](#license)
 
-## Quick Start
+## What is in the box
 
-```bash
-uv venv --python 3.12
-uv sync --extra dev --extra mcp
-uv run codex-chem doctor
-uv run codex-chem figure-tools
-uv run codex-chem normalize --smiles "CC(=O)Oc1ccccc1C(=O)O"
-uv run codex-chem draw --smiles "c1ccccc1C(=O)O" --output svg
-uv run codex-chem compute --smiles "CCO" --task descriptors --task conformers
-uv run codex-chem reaction-analyze --reaction "CBr.[OH-]>>CO.[Br-]" --mode sanity_check
-uv run codex-chem mechanism-draft --reaction "CBr.[OH-]>>CO.[Br-]"
+| Part | What it is | Where |
+|---|---|---|
+| Toolchain | A Python package built on RDKit: the `codex-chem` CLI, the `codex-chem-mcp` MCP server (26 tools) and `codex_organic_chem.kit` for free-form Python. Optional engines: GFN2-xTB, CREST, Open Babel and several OCSR models. | `src/codex_organic_chem` |
+| Skill | `organic-chemistry-assistant`: a reason, try-to-break-it, fix loop with a table of which check refutes which claim. Task protocols (routes, reaction outcomes, structure input, figures, kit API) are loaded on demand. A `chem-route-critic` subagent gives a route an independent second reading. | `.claude/skills`, `.agents/skills`, `.claude/agents` |
+| Review workbench | A browser page where a chemist confirms or corrects structures and routes, in English or Chinese. It needs no build step, and the corrections come back as data. | `src/codex_organic_chem/review_ui` |
+
+## How the pieces work together
+
+```mermaid
+flowchart LR
+    Q["Question, scheme<br>or exam page"] --> M["Model<br>with the skill"]
+    M --> D["Draft answer"]
+    D -- "try to break it" --> C["Checks<br>compare · enumerate<br>route-check · model-kit<br>OCSR · xTB"]
+    C -- "a fact disagrees" --> D
+    D -- "structure read from an image,<br>route about to be acted on" --> R["Review workbench"]
+    R -- "corrections as data" --> D
+    D --> F["Answer and figures"]
 ```
 
-## Skill Setup (Codex and Claude Code)
+The skill tells the model which check can refute which kind of claim and how to
+read each result. The MCP server also tells the client, on connection, to load
+the skill before the first tool call.
 
-Two synchronized copies of the skill ship with the project:
+## Features
+
+### Checks that can fail
+
+Parsing a SMILES the model has just written cannot fail in an informative way.
+These checks can:
+
+| CLI / MCP tool | What it answers |
+|---|---|
+| `compare` / `chem_compare_structures` | Same compound, enantiomer, diastereomer or constitutional isomer, and which centres differ. |
+| `enumerate` / `chem_enumerate` | How many stereoisomers or substitution products, and how many symmetry-distinct C and H environments (NMR signal counts). |
+| `route-check` / `chem_route_check` | Per step: whether a reagent named in the conditions accounts for the formula change; whether each stereocentre was retained, inverted, destroyed or created, judged by spatial arrangement under an atom mapping rather than by CIP letters; which groups drawn unchanged the reagent class attacks (33 classes); which atoms cannot be traced. Per route: the last product against the target, centre by centre. |
+| `model-kit` / `chem_model_kit` | 3D questions from conformer ensembles: which face is shielded and by which atoms, whether two atoms can approach, anti-periplanar populations, planarity, whether a ring fusion can exist, which isomer is lower in energy (optionally refined with GFN2-xTB). |
+
+```bash
+uv run codex-chem compare --a "C[C@H](O)CC" --b "C[C@@H](O)CC"        # enantiomers
+uv run codex-chem enumerate --smiles "CC1CCCCC1" --task substitution   # 5 constitutional, 12 with stereo
+uv run codex-chem enumerate --smiles "OCC(O)CO" --task environments    # 2 C and 5 H environments
+uv run codex-chem route-check --example > route.json
+uv run codex-chem route-check --route route.json --issues-only
+```
+
+`blocking` issues are facts; `review` items are heuristic prompts. See
+[docs/verification-kit.md](docs/verification-kit.md) and the
+[kit API reference](.agents/skills/organic-chemistry-assistant/references/kit-api.md).
+
+### Structures from images
+
+`parse-image` runs the configured OCSR engines over several preprocessed
+variants of a crop. MolScribe is the default; DECIMER, MolGrapher, OpenChemIE,
+OSRA and ChemSchematicResolver are optional. Every candidate is kept with its
+warnings, and readings that no second engine corroborates are flagged.
+`parse-scheme` adds R-group definitions and warns about likely recognition jumps
+along a route. On a hard nine-crop test scheme none of the open-source engines
+produced an exact match. That is why, by default, every structure read from an
+image goes to the review workbench before anything is built on it.
+
+### Review workbench
+
+**Structures.** Each structure is shown next to the image it was read from,
+with the assistant's reading, its question and any alternative readings. The
+reviewer clicks a stereocentre to flip it, sets open centres and double bonds
+with R/S and E/Z buttons, edits SMILES, pastes a Molfile or draws in Ketcher.
+The page states at once how the edit relates to the original (see the image at
+the top).
+
+**Routes.** `route-review` lays out the `route-check` audit step by step, with
+changed centres highlighted on each product. Editing a structure or the
+conditions re-runs the audit at once. Each step can be marked right or wrong,
+each audit prompt answered, and the route approved or sent back.
+
+<p align="center">
+  <img src="docs/images/review-route-step.en.png" width="860" alt="Route review, step 5: an SN2 azide displacement drawn with retention, flagged by the audit">
+  <br>
+  <sub>Step 5 of the practice route: an SN2 azide displacement drawn with retention, which the audit flags.</sub>
+</p>
+
+<details>
+<summary>More screenshots, English and 中文</summary>
+
+| English | 中文 |
+|---|---|
+| [![Route overview](docs/images/review-route.en.png)](docs/images/review-route.en.png) | [![路线总览](docs/images/review-route.zh.png)](docs/images/review-route.zh.png) |
+| [![Route step](docs/images/review-route-step.en.png)](docs/images/review-route-step.en.png) | [![路线步骤](docs/images/review-route-step.zh.png)](docs/images/review-route-step.zh.png) |
+| [![Structure editor](docs/images/review-route-editor.en.png)](docs/images/review-route-editor.en.png) | [![结构编辑](docs/images/review-route-editor.zh.png)](docs/images/review-route-editor.zh.png) |
+| [![Structure review](docs/images/review-structures.en.png)](docs/images/review-structures.en.png) | [![结构校对](docs/images/review-structures.zh.png)](docs/images/review-structures.zh.png) |
+
+</details>
+
+Review sessions outlive the command that opens them: a small background server
+keeps the page up and saves every change under `~/.codex-chem/reviews/`.
+`review-mode auto|ask|off` decides whether the assistant opens the page at a
+review gate, asks first, or stays silent. `codex-chem review-demo` opens two
+practice sessions with planted mistakes (`--lang zh` for Chinese). More in
+[docs/human-review.md](docs/human-review.md).
+
+### Figures
+
+`route-figure` composes a route from reviewed structures into one SVG master and
+a PNG. `mechanism-render` draws an atom-mapped mechanism (MechanismSpec 2.1)
+with curved electron arrows. It first validates the mechanism: atoms, hydrogens
+and charges are conserved; electron moves are replayed against the next state.
+It exports SVG, CDXML, ChemDoodle, Ketcher and Marvin files, and it refuses to
+publish a figure with an arrow that has no electron source or sink.
+
+<p align="center">
+  <img src="docs/images/example-mechanism.png" width="640" alt="Cyanohydrin formation drawn by mechanism-render">
+  <br>
+  <sub>Cyanohydrin formation, one of the curated mechanism test cases. The route figure example is in <a href="docs/figures.md">docs/figures.md</a>.</sub>
+</p>
+
+### Computation and literature
+
+- RDKit: normalization, descriptors, conformers, charges, drawing.
+- GFN2-xTB: optimized geometries and energies, Fukui indices and charges,
+  frequencies and free-energy corrections. CREST: conformer ensembles with
+  populations. Both are used when installed; `codex-chem doctor` says what is
+  missing.
+- `literature-search`: OpenAlex abstracts, citation counts and open-access
+  links, with Crossref as fallback. `synthesis-suggest` is for interactive,
+  one-disconnection-at-a-time brainstorming.
+
+## Benchmarks
+
+Three questions, each measured on its own. The numbers come from our own runs;
+the benchmark harness, the problems and the run records are not part of this
+repository.
+
+### Does the model load the skill?
+
+A skill that is never loaded cannot help. In the OrgReason-Real run of
+2026-11-17, Claude Opus 5.5 loaded the skill in 3 of 18 runs. After the skill
+description was rewritten and the MCP server got instructions, it loaded the
+skill in 14 of 18.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/skill-loading.en.dark.png">
+  <img src="docs/images/skill-loading.en.light.png" width="860" alt="Bar chart: share of sessions in which the model loaded the skill, old description against new description">
+</picture>
+
+| Sessions (Opus 5.5, xhigh) | Old description | New description + MCP server instructions |
+|---|---|---|
+| OrgReason-Real olympiad items (9), loaded first | 3/18 | 16/18 (25/27 with and without the instructions) |
+| Olympiad pages written for the test (4), loaded first | 0/8 | 6/8 |
+| Other organic questions (16), loaded first | 21/32 | 25/32 |
+| Near misses that should not load it (12) | not run | 0/24 |
+| Benchmark runs, conditions D + E, used at all | 3/18 | 14/18 |
+
+The model still answers some questions on the spot without the skill (an
+isomer count, a chair conformation, the haloform reaction).
+
+### Does route-check notice a planted error?
+
+Three curated eight-step routes were corrupted one compound at a time: an
+inverted centre, a dropped wedge, an E/Z flip, a lost carbon, an extra CH₂, an
+O/N swap, a shifted substituent, an omitted last step.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/route-audit.en.dark.png">
+  <img src="docs/images/route-audit.en.light.png" width="860" alt="Bar chart: share of planted errors detected, earlier checks against route-check, by kind of error">
+</picture>
+
+| | Earlier checks (balance, normalization) | route-check, blocking or review |
+|---|---|---|
+| Planted errors that change the output | 67/282 (24%) | 280/282 (99%) |
+| False alarms on the 24 correct steps | all 24 called unbalanced | no blocking issue; 0-3 review prompts per route |
+
+This measures whether the feedback discriminates, not whether a model acts on
+it. Reproduce with `uv run python scripts/benchmark_route_check.py --output-dir outputs/route_check_benchmark`.
+
+### Does it help on real olympiad problems?
+
+OrgReason-Real uses nine organic problems from IChO 2026 and CChO 2026, sent as
+page images and graded field by field against hand-transcribed answers.
+Condition A has no tools. D adds the MCP tools and the skill. E adds an opt-in
+Python tool on top of D.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/orgreason-real.en.dark.png">
+  <img src="docs/images/orgreason-real.en.light.png" width="860" alt="Mean score per condition and dot plot of score per problem for conditions A, D and E">
+</picture>
+
+| Condition (Opus 5.5, xhigh) | Mean auto score | Skill used | Cost per run |
+|---|---|---|---|
+| A, no tools (2026-11-17) | 0.878 | – | 0.96 USD |
+| D, MCP tools + skill (2026-11-18) | 0.906 | 7/9 | 1.41 USD |
+| E, D + Python tool (2026-11-18) | 0.978 | 7/9 | 1.08 USD |
+
+Read these numbers as preliminary:
+
+- Each problem ran once per condition. Condition A alone scored 0.923 in an
+  earlier run, so a single run varies by about 0.05.
+- Five of the nine problems got full marks in every condition. Most of E's lead
+  comes from one problem (CCHO40-P4: A 0.20, D 0.40, E 1.00).
+- The gold answers are hand-transcribed and have not yet been signed off by a
+  chemist.
+- The CChO problems are copyrighted by the Chinese Chemical Society and are
+  used for internal evaluation only.
+
+Repeated runs are needed before claiming an accuracy gain.
+
+## Quick start
+
+The simplest way is to open the repository in Claude Code or Codex and ask it to
+install the project. [INSTALL.md](INSTALL.md) is written for that (`CLAUDE.md`
+and `AGENTS.md` point the agent to it): the agent installs the environment,
+checks it and connects the MCP server.
+
+By hand, with [uv](https://docs.astral.sh/uv/), which provides Python 3.12 and
+installs every dependency at the version pinned in `uv.lock`:
+
+```bash
+uv sync --locked --extra mcp
+uv run python scripts/check_install.py    # the last line must be "install OK"
+uv run codex-chem compare --a "C[C@H](O)CC" --b "C[C@@H](O)CC"
+uv run codex-chem review-demo             # two practice review pages; --lang zh for Chinese
+```
+
+Optional engines (xTB, CREST, Open Babel, OCSR models, Ketcher) and
+troubleshooting are in [INSTALL.md](INSTALL.md).
+
+## Using it from Claude Code or Codex
+
+- **Claude Code:** open this repository as the working directory and approve
+  the MCP server when asked. The skill in
+  `.claude/skills/organic-chemistry-assistant` and the server in `.mcp.json`
+  are picked up automatically.
+- **Codex:** the skill lives in `.agents/skills/organic-chemistry-assistant`;
+  the MCP server entry for `~/.codex/config.toml` is in
+  [INSTALL.md](INSTALL.md#4-connect-the-mcp-server-and-the-skill).
+
+Keep one copy of the skill per host. An older copy installed under the same
+name (in user skills or a synced account) is listed next to this one, and the
+model may load either. Hosts without a shell can enable the `chem_python` MCP
+tool with `CODEX_CHEM_ENABLE_PYTHON=1`. Details:
+[docs/skills-and-mcp.md](docs/skills-and-mcp.md).
+
+## Documentation
+
+| Topic | Where |
+|---|---|
+| Verification kit, route checking, synthesis suggestions | [docs/verification-kit.md](docs/verification-kit.md) |
+| Skills, MCP server, tool list | [docs/skills-and-mcp.md](docs/skills-and-mcp.md) |
+| Review workbench | [docs/human-review.md](docs/human-review.md) |
+| Mechanism and route figures, editor integrations | [docs/figures.md](docs/figures.md) |
+| Optional engines (xTB, CREST, OCSR, ChemDraw, Ketcher ...) | [docs/external-tools.md](docs/external-tools.md) |
+| Kit API and the skill's task protocols | [.agents/skills/organic-chemistry-assistant/references](.agents/skills/organic-chemistry-assistant/references) |
+| Dependencies and licensing | [DEPENDENCIES.md](DEPENDENCIES.md), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
+| Changes | [CHANGELOG.md](CHANGELOG.md) |
+
+## Repository layout
 
 ```text
-.agents/skills/organic-chemistry-assistant/   # Codex
-├── SKILL.md
-└── agents/openai.yaml
-.claude/skills/organic-chemistry-assistant/   # Claude Code
-└── SKILL.md
+src/codex_organic_chem/      CLI, MCP server, kit, review workbench (review_ui/)
+.claude/skills/              the skill for Claude Code
+.claude/agents/              chem-route-critic subagent
+.agents/skills/              the same skill for Codex
+integrations/ketcher/        optional Ketcher editor for the review page
+integrations/chemdoodle/     optional ChemDoodle Web Components viewer
+scripts/                     installers, tool benchmarks, OCSR adapters, README figures
+docs/                        detailed documentation and images
+tests/                       pytest suite
 ```
 
-Claude Code discovers the `.claude/skills` copy automatically when this
-repository is the working directory, and `.mcp.json` exposes the
-`codex-organic-chem` MCP server to it. For any other environment, copy or
-symlink the relevant folder into the target skills directory and keep this
-repository available so the MCP server can launch:
-
-```bash
-uv run codex-chem-mcp
-```
-
-## MCP
-
-The repository includes `.mcp.json`:
-
-```bash
-uv run codex-chem-mcp
-```
-
-The MCP tools have the planned names:
-
-- `chem_parse_image`
-- `chem_normalize_structure`
-- `chem_draw`
-- `chem_compute`
-- `chem_reaction_analyze`
-- `chem_mechanism_draft`
-- `chem_mechanism_render`
-- `chem_mechanism_validate`
-- `chem_mechanism_spec_example`
-- `chem_route_figure`
-- `chem_route_figure_spec_example`
-- `chem_figure_tool_status`
-- `chem_input_review`
-- `chem_structure_review_batch`
-- `chem_structure_review_result`
-- `chem_literature_search`
-- `chem_synthesis_suggest`
-
-## Required Review Gate
-
-For any molecule or reaction recognized from an image, scan, screenshot, or
-ambiguous text, the assistant must render the parsed candidate and wait for
-explicit user confirmation before continuing.
-
-```bash
-codex-chem input-review --image-path scheme.png --kind reaction --wait
-codex-chem input-review --smiles "CC(=O)Oc1ccccc1C(=O)O" --wait
-```
-
-For CLI review, `--wait` keeps the localhost editor alive and blocks until the
-user confirms/corrects the input or the session reaches `--timeout-s` (default:
-1800 seconds). Without `--wait`, `input-review` intentionally returns a static
-preview only, with no editor URL that would die when the command exits. The
-long-running MCP server can return a live session immediately and collect it
-later with `chem_structure_review_result`.
-
-For multiple molecule SMILES that need human correction, start a local review
-queue instead of copying rendered SVGs by hand. The review page opens in the
-default browser automatically (disable with `CODEX_CHEM_REVIEW_OPEN_BROWSER=0`)
-and works with zero build steps: when no Ketcher build is present, a built-in
-editor with server-side RDKit previews is served instead. Building Ketcher
-(below) upgrades the same URL to the full drawing UI.
-
-```bash
-cat > reviews.json <<'JSON'
-{
-  "items": [
-    {"id": "cmpd-1", "label": "compound 1", "smiles": "CCO"},
-    {"id": "cmpd-2", "label": "compound 2", "smiles": "c1ccccc1C(=O)O"}
-  ]
-}
-JSON
-codex-chem review-batch --input reviews.json --wait
-```
-
-With `--wait`, the command prints a localhost `review_url` to stderr, waits
-while that URL remains live, and returns the final JSON after the queue is
-finished or times out. MCP callers can also call
-`chem_structure_review_batch(..., wait=false)` to get a URL, then later call
-`chem_structure_review_result(session_id, review_token, wait=true)` to collect
-the same result. Confirmed and modified structures return per-item
-`confirmed`, `modified`, `skipped`, or `error` results. Confirmed and modified
-structures are re-normalized through RDKit before downstream reasoning sees
-canonical/isomeric SMILES, Molfile, InChIKey, warnings, and metadata.
-
-Downstream publication mechanisms, synthesis suggestions, expensive
-calculations, and literature-backed route expansion should only run after the
-user confirms the rendered structure or supplies corrected machine-readable
-input.
-
-## Mechanism Figures
-
-Publication-oriented mechanism work now has two levels. `mechanism-draft` gives
-a mechanistic hypothesis and explanation, but it is not treated as final
-manuscript artwork:
-
-```bash
-codex-chem mechanism-draft \
-  --reaction "CBr.[OH-]>>CO.[Br-]" \
-  --quality publication
-```
-
-This returns `awaiting_user_confirmation` with a reaction preview. After the
-rendered reaction is confirmed:
-
-```bash
-codex-chem mechanism-draft \
-  --reaction "CBr.[OH-]>>CO.[Br-]" \
-  --quality publication \
-  --confirmed
-```
-
-For accurate figure output, use an explicit atom-mapped mechanism canvas:
-
-```bash
-codex-chem mechanism-render --example
-codex-chem mechanism-validate --spec mechanism.spec.json
-codex-chem mechanism-render --spec mechanism.spec.json --output-dir mechanism_out
-```
-
-The spec must provide every intermediate and every curved arrow anchor using
-atom-map numbers or atom-map bond pairs. It supports:
-
-- `spec_version: "2.1"` semantic mechanism specs (legacy 1.0/2.0 accepted),
-- intermediate molecules as mapped SMILES/Molfile,
-- curved electron-pair and radical arrows,
-- lone-pair dots, with publication defaults that show only mechanistically
-  relevant electron-source lone pairs unless `lone_pair_display="all"` is set,
-- formal charges and custom charge labels,
-- partial charges such as `δ+` and `δ-`,
-- graph edits for bond formation/breaking, charge changes, proton transfers,
-  resonance, radicals, and counterion bookkeeping,
-- panel titles, notes, captions, SVG output, and ChemDraw-like CDXML output.
-
-Version 2.1 requires explicit, disjoint starting/product molecule selections
-for every elementary step. The validator checks mapped atom/isotope identity,
-hydrogen and charge conservation, electron-source capacity, simultaneous arrow
-replay and declared graph edits against the actual next state. `semantic_checks`
-reports `valid`, `invalid`, `incomplete` or `unsupported`; valid means supported
-electron bookkeeping, not kinetic or experimental proof. Currently supported
-replay covers localized main-group pair transfers and paired bond homolysis.
-General radical and aromatic/metal mechanisms require further analysis.
-
-Transferred H atoms remain explicit and mapped. The trace resolves each side
-separately, computes changes from the structures and retains radical/stereo
-metadata. SVG embeds the same spec and trace, with a source-spec SHA-256, so AI
-can read the chemistry without guessing from pixels. This digest does not
-authenticate later manual edits to SVG paths. The canvas blocks stereo/E-Z and
-isotope depictions it cannot faithfully draw. Editor exports remain review
-adapters; native-editor round-trip fidelity is not established by these tests.
-
-See the [mechanism authoring contract](.agents/skills/organic-chemistry-assistant/references/mechanism-spec.md).
-For figure quality, use the [published-reference and visual-review workflow](.agents/skills/organic-chemistry-assistant/references/mechanism-graphics.md).
-The default compact renderer now uses the shared RDKit skeletal painter,
-sizes rows to their ink, relocates small reagents near reactive atoms and keeps
-unchanged mapped cores aligned. Electron arrows use independent cubic end
-tangents; sampled collisions with structures/operators/other arrows and arrows
-longer than 3.5 bond lengths block the figure. This is a layout heuristic, not a
-journal standard or a substitute for viewing the image. The 2× PNG is a review
-preview; the SVG is the vector master. `layout.renderer: "legacy"` retains the
-old canvas for compatibility. Legacy cell dimensions no longer stretch compact
-figures; use molecule `depiction` and arrow `routing` fields for art direction.
-Run `uv run python scripts/benchmark_mechanisms.py --output-dir outputs/mechanisms`
-for five curated classes, SVG/JSON round trips and deliberately invalid cases.
-This is a toolchain regression benchmark, not a model-versus-model accuracy study.
-
-When `--output-dir` is used, the result includes `editor_followup` with local
-ChemDraw/ChemDoodle/Marvin/Inkscape/Illustrator open-command templates for the
-generated files when those tools are detected.
-
-`mechanism-render` now returns and writes a multi-format publication/review
-package:
-
-- `mechanism.svg`: RDKit-based vector layout with atom-map anchored electron
-  arrows, shortened endpoints, restrained journal-style arrow weights, optional
-  source-only lone-pair display, and cross-panel alignment.
-- `mechanism.cdxml`: ChemDraw-like CDXML containing fragments, nodes, bonds,
-  text, reaction-step records, and electron-flow arrow objects.
-- `mechanism.chemdoodle.json`: ChemDoodle JSON with `Pusher` shapes whose
-  source/target ids point to atom or bond objects and preserve electron count;
-  atoms also carry lone-pair counts such as `numLonePair`.
-- `mechanism.chemdoodle.html`: a local ChemDoodle Web Components viewer when
-  `integrations/chemdoodle/ChemDoodleWeb.js` is installed.
-- `mechanism.trace.json`: an AI-readable step trace with starting state,
-  electron moves, graph edits, bond/charge changes, expected state, validation
-  checks, and review boundaries.
-- `mechanism.ketcher.json`: an adapter payload for using Ketcher as the
-  open-source correction gate for structures, reactions, and atom maps.
-- `mechanism.marvin.json`: an adapter payload for ChemAxon Marvin/Marvin JS
-  review when a licensed Marvin package is installed locally.
-
-`mechanism-render` also runs a publication-figure gate. If an arrow has no
-electron source/sink, starts from an atom center instead of a lone pair or bond,
-references missing atom-map numbers, or depends on a hidden lone pair, the result
-is marked `blocked_for_publication` or `ok_with_warnings` and includes
-`publication_checks`.
-
-This mirrors how manuscript mechanisms are usually made: ChemDraw/CDXML or
-similar chemical drawing software for the chemical canvas, with final manual
-polishing in ChemDraw, ChemDoodle, Marvin, ChemSketch, Illustrator, or Inkscape.
-ChemDraw/CDXML, ChemDoodle, and Marvin-style tools support reaction/mechanism
-arrows and chemical annotations in ways RDKit alone does not. The generated
-`mechanism_trace` is intended to help an AI reason step by step through the
-public, auditable mechanism state rather than guessing from a single overall
-reaction equation.
-
-Implementation rule learned from ChemDoodle/Marvin-style editors: electron
-pushers must be attached to chemical objects, not arbitrary SVG curves.
-Therefore `mechanism-render` treats `from_lone_pair_atom_map`, `from_bond`,
-`to_atom_map`, and `to_bond` as chemical anchors. It warns when disconnected
-reactants are packed into one molecule entry, because that gives poor RDKit
-layout and unreadable arrow geometry; use separate molecule entries for each
-reactant, intermediate, counterion, or byproduct.
-
-For manuscript-like figures, keep the visual electron annotations sparse:
-`presentation_mode="publication"` defaults to source-only lone-pair display, so
-an anionic nucleophile can carry one visible lone-pair pair at the arrow tail
-while nonreacting heteroatom lone pairs and product lone pairs stay hidden.
-Use full lone-pair counts only for teaching, debugging, or when the chemistry
-requires them.
-
-## Route Figures
-
-Route and reaction-scheme figures are a first-class skill capability. Use
-`route-figure` when the desired output is the composed publication-style route
-figure format rather than a compact RDKit reaction preview.
-
-```bash
-codex-chem route-figure --example
-codex-chem route-figure --spec route_figure.spec.json --output-dir route_out --format svg --format png
-```
-
-The route spec is JSON with a `rows` list. Each row contains ordered `items`:
-molecule items with reviewed `smiles` or `molfile`, `arrow` items with a main
-label and optional sublabel, and optional `plus` or short `text` items. The
-renderer validates and normalizes every molecule through RDKit, composes a
-single SVG master from independent molecule fragments, and writes PNG output
-from that SVG when a local rasterizer such as Chrome, Inkscape, ImageMagick, or
-`rsvg-convert` is available.
-
-This makes the route-figure format reproducible for users who install the
-GitHub repository; it is no longer dependent on unrelated local scripts or
-one-off prompt reconstruction.
-
-### Optional editor integrations
-
-Ketcher can be built locally from the bundled integration:
-
-```bash
-cd integrations/ketcher
-npm install
-npm run build
-npm run preview -- --port 4173
-```
-
-`codex-chem figure-tools` auto-detects `integrations/ketcher/dist` after a
-local build. The repository commits `package.json` and `package-lock.json`, but
-ignores `node_modules/` and `dist/`.
-`chem_structure_review_batch` serves that built `dist` directly from its local
-review server when present, targets a running Vite/Ketcher URL when
-`CODEX_CHEM_KETCHER_URL` is set, and otherwise falls back to the built-in
-review editor so human confirmation never requires a build step.
-
-ChemDoodle Web Components are detected from `integrations/chemdoodle` or
-`CODEX_CHEM_CHEMDOODLE_WEB_DIR`; the renderer writes
-`mechanism.chemdoodle.html` so atom-bound lone pairs and object-bound pusher
-arrows can be reviewed in a ChemDoodle-style renderer. The bundled ChemDoodle
-Web Components files are third-party GPLv3/commercial-license files; see
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-Marvin JS/Desktop requires a ChemAxon license. Place a licensed Marvin JS
-package in `integrations/marvin` or set `CODEX_CHEM_MARVIN_JS_DIR`; the renderer
-still writes `mechanism.marvin.json` and CDXML/MOL/RXN-facing artifacts for
-manual Marvin review.
-
-## Stepwise Synthesis Suggestions
-
-Synthesis suggestions are intentionally one decision layer at a time. The tool
-does not dump a full route in one pass.
-
-```bash
-codex-chem synthesis-suggest --target-smiles "CC(=O)Oc1ccccc1C(=O)O"
-codex-chem synthesis-suggest --target-smiles "CC(=O)Oc1ccccc1C(=O)O" --confirmed
-```
-
-Each option includes local tool data and, when enabled, Crossref literature
-metadata. The next step is to choose or reject one disconnection before any
-route expansion.
-
-## Optional External Tools
-
-The code detects these tools if present and reports `unavailable` otherwise. Run:
-
-```bash
-codex-chem doctor
-```
-
-On macOS, install the supported local tools with:
-
-```bash
-scripts/install_external_tools_macos.sh
-```
-
-- RDKit: core parser/drawer/computation, installed by `uv sync`.
-- Open Babel: install with `brew install open-babel`; executable is `obabel`.
-- xTB: install with `brew tap grimme-lab/qc && brew install xtb`, or use the
-  conda-forge fallback at `~/.local/share/codex-organic-chem/conda-tools`; used
-  by `chem_compute` tasks `xtb_opt`, `xtb_reactivity`, and `xtb_thermo` for
-  optimized geometry/energy, atom-mapped charges and Fukui indices, and
-  frequencies/free-energy corrections.
-- CREST: install with `brew install crest` from the Grimme tap, or use the
-  conda-forge fallback created at
-  `~/.local/share/codex-organic-chem/conda-tools`; `chem_compute task=crest`
-  runs the conformer search and returns ensemble energies and populations.
-- For `xtb`/`crest`, the software prefers `CODEX_CHEM_*_PATH`, then the local conda-forge tool env, then PATH. This avoids broken Homebrew builds when the fallback exists.
-- OSRA: optional OCSR fallback. On Apple Silicon macOS, the tool auto-detects the Rosetta/x86_64 conda install at `~/.local/share/codex-organic-chem/ocsr-tools/osra-osx64/bin/osra`; set `CODEX_CHEM_OSRA_PATH` only to override it.
-- ChemSchematicResolver: optional legacy schematic/label resolver. It is installed locally but kept off the default crop OCSR path because the Q8 benchmark produced no structure candidates; set `CODEX_CHEM_CSR_CMD` or `CODEX_CHEM_ENABLE_CSR_DEFAULT=1` only when label-heavy schemes need it.
-- MolScribe/DECIMER/MolGrapher/OpenChemIE/RxnScribe: optional modern image OCR adapters. Install them in separate ML environments and set the matching `CODEX_CHEM_*_CMD` variable.
-- `scripts/molscribe_adapter.py` is a ready-to-use MolScribe command adapter for cropped molecule images. It prints JSON/SMILES for `codex-chem parse-image`, expands common textbook labels such as Me/OMe/NO2/CO2Et/t-Bu/Ph/OMs/OTs/NHTs/MEMO/SO2Tol, preserves R/X placeholders as dummy atoms for manual or context-aware resolution, preserves MolScribe chiral atom tags when possible, and downloads the upstream checkpoint on first use when `CODEX_CHEM_MOLSCRIBE_CHECKPOINT` is not set.
-- `scripts/decimer_adapter.py`, `scripts/molgrapher_adapter.py`, `scripts/openchemie_adapter.py`, and `scripts/csr_adapter.py` provide JSON-line wrappers for local DECIMER, MolGrapher, OpenChemIE, and ChemSchematicResolver environments.
-- Publication mechanism polish: ChemDraw, ChemDoodle, or ChemAxon Marvin are the
-  chemically aware editors to learn from; Inkscape (`brew install --cask
-  inkscape`) or Illustrator can polish the exported SVG but do not validate
-  chemistry. `codex-chem doctor` lists this in `publication_figure_guide`.
-
-Check local editor support with:
-
-```bash
-codex-chem figure-tools
-```
-
-This reports whether ChemDraw, ChemDoodle, Marvin, Ketcher, Inkscape,
-Illustrator, and Open Babel CDXML conversion are available. ChemDraw support is
-file/workflow integration: the tool prepares SVG/spec/CDXML packages and gives
-open-command templates, but does not assume unattended ChemDraw GUI automation.
-
-Custom OCSR command variables may contain `{input}` and should print JSON with a
-`smiles`, `canonical_smiles`, `reaction_smiles`, or `molfile` field, a JSON
-`candidates` list, or plain SMILES lines. For line-angle/skeletal molecule
-crops, `codex-chem parse-image` also tries white-background, padded,
-high-contrast, and thickened line-art image variants before ranking candidates.
-Configured adapters may therefore be called more than once per crop and should
-be idempotent. The winning candidate records `metadata.image_variant` so poor
-raw-crop recognition can be traced back to a preprocessing variant. Candidate
-ranking still penalizes collapsed tiny outputs and low-confidence label-artifact
-atoms, and preserves raw tool metadata/warnings instead of forcing a single
-merged answer.
-
-Scheme-level OCSR helpers:
-
-```bash
-codex-chem ocsr-benchmark --gold-smiles render_q8_sample_style.py --image-dir ocsr_crops --out tsv
-codex-chem parse-scheme --image scheme.png --crops ocsr_crops --gold-map legend.json
-```
-
-`ocsr-benchmark` reports exact graph match, main-fragment match, dummy count,
-fragment count, stereo warnings, and tool warnings for golden crop sets.
-`parse-scheme` keeps raw candidates, applies optional `R`/`X`/`R1` definitions
-with RDKit graph replacement, and emits route-consistency warnings for likely
-OCR jumps such as arene ortho/meta/para changes.
-
-Local Q8 benchmark note, 2026-05-10/2026-05-11: DECIMER, MolGrapher, OpenChemIE,
-OSRA, and ChemSchematicResolver were installed or tested against the 9 crop
-golden set from `render_q8_sample_style.py`. None of the tested open-source
-tools produced an exact graph or main-fragment match on this difficult scheme.
-MolScribe was the most useful crop-level default because it preserved larger
-scaffolds and dummy placeholders for `R`/`X`/`R1`/`R2`; DECIMER sometimes
-recognized the core but emitted non-RDKit tokens such as `[R]`/`[X]`;
-MolGrapher was useful for OCR label metadata but often collapsed structures or
-read labels as atoms; the OpenChemIE crop adapter usually duplicated MolScribe
-behavior or returned `<invalid>`. OpenChemIE reaction mode did segment one full
-scheme into reactants/products/conditions with bbox/molfile data, so it remains
-useful as a scheme-level auxiliary source, but the output still needs conversion
-and manual review before reaction SMILES use. OSRA is available as a Rosetta
-x86_64 fallback and produced RDKit-sanitizable dummy-atom skeletons on all 9
-crops, but no exact/main-fragment matches. ChemSchematicResolver is available
-through a local Python 3.6 x86_64 environment with a compiled `osra_rgroup`
-extension; on these isolated crops it produced no structure candidates, so it
-remains best treated as a label/schematic auxiliary rather than the primary crop
-recognizer.
-
-Useful environment overrides:
-
-```bash
-export CODEX_CHEM_OBABEL_PATH=/path/to/obabel
-export CODEX_CHEM_XTB_PATH=/path/to/xtb
-export CODEX_CHEM_CREST_PATH=/path/to/crest
-export CODEX_CHEM_OSRA_PATH=/path/to/osra
-export CODEX_CHEM_MOLSCRIBE_CMD='your-molscribe-command --input {input}'
-export CODEX_CHEM_DECIMER_CMD='your-decimer-command --input {input}'
-export CODEX_CHEM_MOLGRAPHER_CMD='your-molgrapher-command --input {input}'
-export CODEX_CHEM_OPENCHEMIE_CMD='your-openchemie-command --input {input}'
-export CODEX_CHEM_CSR_CMD='your-chemschematicresolver-command --input {input}'
-export CODEX_CHEM_ENABLE_CSR_DEFAULT=1
-export CODEX_CHEM_RXNSCRIBE_CMD='your-rxnscribe-command --input {input}'
-export CODEX_CHEM_DISABLE_IMAGE_PREPROCESSING=1
-export CODEX_CHEM_KEEP_PREPROCESSED_IMAGES=1
-export CODEX_CHEM_CHEMDRAW_APP="/Applications/ChemDraw.app"
-export CODEX_CHEM_CHEMDOODLE_APP="/Applications/ChemDoodle.app"
-export CODEX_CHEM_MARVIN_APP="/Applications/MarvinSketch.app"
-export CODEX_CHEM_KETCHER_URL="http://localhost:8080"
-export CODEX_CHEM_KETCHER_DIST="/path/to/ketcher/build"
-```
+## License
+
+MIT, see [LICENSE](LICENSE). The optional ChemDoodle Web Components files are
+third-party GPLv3/commercial files; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The charts in this README are
+drawn by `scripts/make_readme_figures.py`.

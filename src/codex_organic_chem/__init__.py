@@ -1,8 +1,10 @@
 """Codex organic chemistry assistant package."""
 
 from .service import (
+    chem_compare_structures,
     chem_compute,
     chem_draw,
+    chem_enumerate,
     chem_figure_tool_status,
     chem_input_review,
     chem_literature_search,
@@ -10,13 +12,17 @@ from .service import (
     chem_mechanism_render,
     chem_mechanism_spec_example,
     chem_mechanism_validate,
+    chem_model_kit,
     chem_normalize_structure,
     chem_ocsr_benchmark,
     chem_parse_image,
     chem_parse_scheme,
     chem_reaction_analyze,
+    chem_review_mode,
+    chem_route_check,
     chem_route_figure,
     chem_route_figure_spec_example,
+    chem_route_review,
     chem_structure_review_batch,
     chem_structure_review_result,
     chem_synthesis_suggest,
@@ -24,8 +30,10 @@ from .service import (
 )
 
 __all__ = [
+    "chem_compare_structures",
     "chem_compute",
     "chem_draw",
+    "chem_enumerate",
     "chem_figure_tool_status",
     "chem_input_review",
     "chem_literature_search",
@@ -33,17 +41,21 @@ __all__ = [
     "chem_mechanism_render",
     "chem_mechanism_spec_example",
     "chem_mechanism_validate",
+    "chem_model_kit",
     "chem_normalize_structure",
     "chem_ocsr_benchmark",
     "chem_parse_image",
     "chem_parse_scheme",
     "chem_reaction_analyze",
+    "chem_review_mode",
+    "chem_route_check",
     "chem_route_figure",
     "chem_route_figure_spec_example",
+    "chem_route_review",
     "chem_structure_review_batch",
     "chem_structure_review_result",
     "chem_synthesis_suggest",
     "chem_tool_doctor",
 ]
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
