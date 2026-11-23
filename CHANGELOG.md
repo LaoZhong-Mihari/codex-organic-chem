@@ -4,6 +4,30 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Route figures (`route-figure` / `chem_route_figure`) keep a shared core in
+  place: a structure given as SMILES is laid out with the part it shares with
+  an earlier structure held at that structure's 2D coordinates, so a protected
+  ring no longer flips or turns from step to step (`align_structures`, on by
+  default; Molfile input keeps its own layout). Digits in reagent formulas in
+  arrow text become subscripts (`subscript_formulas`). Long captions wrap and
+  widen their cell instead of running off the canvas, long titles and
+  footnotes widen the canvas, and `max_width` wraps a long row at arrows into
+  rows of even width. Results gain `layout` and, per molecule, `aligned_to`
+  and `aligned_atoms`.
+- `route-check --figure-dir` (`route_to_figure_spec`) captions each compound
+  with its number in bold and its name underneath, puts reagents above each
+  arrow and solvents, temperatures, times and atmospheres below
+  (`split_conditions`), and wraps the steps into rows of similar width
+  (`max_width` 1200; `steps_per_row` keeps fixed rows). The hydroxyproline
+  example is no longer blocked by a clipped caption.
+
+### Added
+
+- README section on route and mechanism figures, with the spec of its route
+  figure in `docs/examples/hydroxyproline-route-figure.json`.
+
 ## [1.1.0] - 2026-11-19
 
 ### Added

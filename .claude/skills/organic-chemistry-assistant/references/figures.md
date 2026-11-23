@@ -9,9 +9,15 @@ to `blocked_for_publication`.
 - Molecules and single reactions: `chem_draw` (SVG master; PNG derived after the
   audit via `output_file`).
 - Routes and schemes: `chem_route_figure` (`style_preset`: `acs` default, `rsc`,
-  `presentation`). `route-check --figure-dir` builds the spec from a route file
-  and draws every numbered compound; use that while planning. RDKit one-call
-  previews are for internal checks only.
+  `presentation`). SMILES structures keep a shared core in the previous
+  structure's orientation (`align_structures`, on by default; a Molfile keeps
+  its own layout), formula digits in arrow text become subscripts
+  (`subscript_formulas`), and `max_width` wraps a long row at arrows into even
+  rows. Put reagents in the arrow `label` and solvent and temperature in its
+  `sublabel`. `route-check --figure-dir` builds the spec from a route file
+  (numbers in bold, names below, conditions split the same way) and draws
+  every numbered compound; use that while planning. RDKit one-call previews
+  are for internal checks only.
 - Mechanisms with curved arrows: write a MechanismSpec 2.1
   ([mechanism-spec](mechanism-spec.md)), `chem_mechanism_validate`, then
   `chem_mechanism_render`. Compact rendering is the default;

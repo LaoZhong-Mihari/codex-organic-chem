@@ -214,12 +214,33 @@ def test_route_becomes_a_drawable_scheme(tmp_path):
     spec = kit.route_to_figure_spec(route)
     arrows = [item for row in spec["rows"] for item in row["items"] if item.get("type") == "arrow"]
     assert len(arrows) == 8
-    assert arrows[6]["label"] == "2,2-dimethoxypropane"  # commas inside a reagent name survive
+    # Reagents above the arrow, solvent and temperature below; the comma in a locant survives.
+    assert (arrows[6]["label"], arrows[6]["sublabel"]) == ("2,2-dimethoxypropane, PPTS", "CH2Cl2, rt")
+    first = next(item for row in spec["rows"] for item in row["items"] if item.get("smiles"))
+    assert (first["label"], first["code"]) == ("1", "Roche ester")  # number in bold, name underneath
+    assert spec["max_width"] and len(spec["rows"]) == 1  # the renderer wraps the row at arrows
     from codex_organic_chem.service import chem_route_check
 
     report = chem_route_check(route, figure_output_dir=str(tmp_path))
     assert report["figure"]["status"] in {"ok", "ok_with_warnings"}
     assert (tmp_path / "route.svg").exists()
+
+
+def test_long_compound_names_no_longer_block_the_route_figure(tmp_path):
+    # Compound 1's name is wider than its structure; it used to run off the canvas.
+    from codex_organic_chem.service import chem_route_check
+
+    report = chem_route_check(load("hydroxyproline_double_inversion"), figure_output_dir=str(tmp_path))
+    assert report["figure"]["status"] == "ok"
+
+
+def test_conditions_split_into_reagents_and_settings():
+    assert rc.split_conditions("Boc2O, Et3N, CH2Cl2, rt") == ("Boc2O, Et3N", "CH2Cl2, rt")
+    assert rc.split_conditions("Pd(PPh3)4, K2CO3, dioxane/H2O, 90 °C") == ("Pd(PPh3)4, K2CO3", "dioxane/H2O, 90 °C")
+    assert rc.split_conditions("H2 (1 atm), Pd/C, MeOH, rt") == ("H2 (1 atm), Pd/C", "MeOH, rt")
+    assert rc.split_conditions("LiOH, THF/H2O 3:1, 0 °C, 2 h") == ("LiOH", "THF/H2O 3:1, 0 °C, 2 h")
+    assert rc.split_conditions("toluene, reflux") == ("", "toluene, reflux")
+    assert rc.split_conditions("") == ("", "")
 
 
 def test_cli_exposes_the_audit(tmp_path, capsys):

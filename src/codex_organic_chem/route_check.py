@@ -1730,8 +1730,18 @@ def route_check_example() -> dict[str, Any]:
     }
 
 
-def route_to_figure_spec(route: dict[str, Any], *, steps_per_row: int = 3) -> dict[str, Any]:
-    """Turn a route into a ``chem_route_figure`` spec so every compound gets drawn."""
+def route_to_figure_spec(
+    route: dict[str, Any], *, steps_per_row: int | None = None, max_width: int = 1200
+) -> dict[str, Any]:
+    """Turn a route into a ``chem_route_figure`` spec so every compound gets drawn.
+
+    Each compound is captioned with its number in bold and its name, if any,
+    underneath. By default the steps form one row that the renderer wraps at
+    arrows into rows of similar width (``max_width`` pixels); a step whose
+    reactants do not include the previous product starts a new row. Pass
+    ``steps_per_row`` for fixed rows instead, each starting with its first
+    reactant.
+    """
     compounds = _Compounds(route.get("compounds"))
     rows: list[dict[str, Any]] = []
     items: list[dict[str, Any]] = []
@@ -1739,11 +1749,10 @@ def route_to_figure_spec(route: dict[str, Any], *, steps_per_row: int = 3) -> di
     count = 0
 
     def molecule(key: str) -> dict[str, Any]:
-        shown = key.removeprefix("inline:")
         return {
             "id": f"cmpd_{len(rows)}_{len(items)}",
-            "code": shown if not key.startswith("inline:") else "",
-            "label": compounds.names.get(key, ""),
+            "label": key if not key.startswith("inline:") else "",
+            "code": compounds.names.get(key, ""),
             "smiles": canonical(_stripped(compounds.mols[key])),
         }
 
@@ -1752,7 +1761,8 @@ def route_to_figure_spec(route: dict[str, Any], *, steps_per_row: int = 3) -> di
         product_key = compounds.resolve(step.get("product"))
         if not reactant_keys or product_key is None:
             continue
-        if count and count % steps_per_row == 0:
+        chain_breaks = previous_product is not None and previous_product not in reactant_keys
+        if (steps_per_row and count and count % steps_per_row == 0) or (items and chain_breaks):
             rows.append({"items": items})
             items = []
             previous_product = None
@@ -1765,12 +1775,53 @@ def route_to_figure_spec(route: dict[str, Any], *, steps_per_row: int = 3) -> di
         for key in rest:
             items.append({"type": "plus"})
             items.append(molecule(key))
-        conditions = str(step.get("conditions") or "")
-        head, _, tail = conditions.partition(", ")
-        items.append({"type": "arrow", "label": head.strip(), "sublabel": tail.strip()})
+        above, below = split_conditions(str(step.get("conditions") or ""))
+        items.append({"type": "arrow", "label": above, "sublabel": below})
         items.append(molecule(product_key))
         previous_product = product_key
         count += 1
     if items:
         rows.append({"items": items})
-    return {"title": route.get("title", ""), "style_preset": "acs", "rows": rows}
+    spec: dict[str, Any] = {"title": route.get("title", ""), "style_preset": "acs", "rows": rows}
+    if not steps_per_row:
+        spec["max_width"] = max_width
+    return spec
+
+
+_SOLVENTS = {
+    "ch2cl2", "dcm", "chcl3", "ccl4", "dce", "1,2-dce", "thf", "2-methf", "et2o", "ether", "diethyl ether",
+    "dioxane", "1,4-dioxane", "dme", "meoh", "etoh", "iproh", "i-proh", "ipa", "tbuoh", "t-buoh", "n-buoh",
+    "h2o", "water", "mecn", "ch3cn", "acetonitrile", "dmf", "dma", "dmac", "dmso", "nmp", "hmpa", "toluene",
+    "phme", "benzene", "phh", "xylene", "xylenes", "hexane", "hexanes", "pentane", "heptane", "cyclohexane",
+    "etoac", "acetone", "tfe", "hfip", "meno2", "ch3no2", "phcf3", "chlorobenzene", "phcl", "mtbe", "tbme",
+    "cpme", "diglyme",
+}
+_SETTING = re.compile(
+    r"°\s*C|\b(?:rt|r\.t\.|reflux|overnight|o/n|room temperature|heat|microwave)\b|Δ"
+    r"|^-?\d+(?:\.\d+)?\s*(?:h|hr|hrs|min|d|days?|s|K)$"
+    r"|^\d+(?:\.\d+)?\s*(?:atm|bar|psi)$|^(?:N2|Ar|argon|nitrogen|air)$",
+    re.IGNORECASE,
+)
+_RATIO = re.compile(r"\s*\(?\d+(?:\.\d+)?\s*:\s*\d+(?:\.\d+)?\)?$")
+
+
+def split_conditions(conditions: str) -> tuple[str, str]:
+    """Split a conditions string into the text above and below a scheme arrow.
+
+    Reagents and catalysts go above; solvents (including mixtures such as
+    THF/H2O 3:1), temperatures, times and atmospheres go below, in their
+    original order. Parts are separated at a comma followed by a space, so
+    locants such as 2,2-dimethoxypropane stay whole.
+    """
+    plain = conditions.translate(str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789"))
+    above: list[str] = []
+    below: list[str] = []
+    for part in (p.strip() for p in re.split(r",\s+", plain.strip())):
+        if not part:
+            continue
+        solvents = [s.strip().lower() for s in re.split(r"[/–]", _RATIO.sub("", part))]
+        if _SETTING.search(part) or all(s in _SOLVENTS for s in solvents):
+            below.append(part)
+        else:
+            above.append(part)
+    return ", ".join(above), ", ".join(below)

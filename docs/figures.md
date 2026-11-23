@@ -4,10 +4,13 @@
 
 Two examples drawn by the toolchain. The mechanism is one of the curated cases
 of `scripts/benchmark_mechanisms.py` (cyanohydrin formation, two elementary
-steps, electron bookkeeping validated). The route is the demo route of the
-review workbench rendered with `route-figure`; `route-check` finds no blocking
-issue in it and asks three review questions (which ester K₂CO₃/MeOH cleaves,
-the methyl ester under methoxide, the α-centre under LiOH).
+steps, electron bookkeeping validated). The route is the hydroxyproline route
+of `tests/fixtures/routes/`, drawn by `route-figure` from
+[`docs/examples/hydroxyproline-route-figure.json`](examples/hydroxyproline-route-figure.json)
+([SVG master](images/example-route-figure.svg); the PNG is that SVG rasterized
+at 2×). `route-check` finds no blocking issue in it and asks three review
+questions (which ester K₂CO₃/MeOH cleaves, the methyl ester under methoxide,
+the α-centre under LiOH).
 
 <img src="images/example-mechanism.png" width="760" alt="Cyanohydrin formation drawn by mechanism-render: cyanide adds to formaldehyde, then the alkoxide is protonated by HCN">
 
@@ -166,6 +169,54 @@ from that SVG when a local rasterizer such as Chrome, Inkscape, ImageMagick, or
 This makes the route-figure format reproducible for users who install the
 GitHub repository; it is no longer dependent on unrelated local scripts or
 one-off prompt reconstruction.
+
+`style_preset` sets the geometry shared by every structure in the figure:
+`acs` (default, 30 px bonds), `rsc` (28 px) or `presentation` (36 px, coloured
+heteroatoms); `bond_length_px` overrides the bond length. In a molecule item,
+`label` is the bold caption line (usually the compound number) and `code` the
+grey line under it; captions wrap at the wider of their structure and 220 px,
+and the cell grows to fit them, so a long name cannot run off the canvas.
+
+Three options make a scheme read like one drawn by hand:
+
+- `align_structures` (default `true`): a structure given as SMILES is laid out
+  with the part it shares with one of the three previous structures (largest
+  common substructure, complete rings only, at least five atoms and half of the
+  smaller structure) held at that structure's 2D coordinates. A protected core
+  therefore keeps its orientation from step to step. The first structure is
+  laid out with RDKit's CoordGen. Molfile input keeps its own 2D coordinates and
+  is only straightened; it can still serve as the template for the next
+  structure. `"align": false` on an item lays that structure out from scratch,
+  and a constrained layout that comes out cramped or with uneven bonds is
+  dropped the same way. Stereochemistry is unaffected: wedges are assigned from
+  the input's stereo tags for the final coordinates.
+- `subscript_formulas` (default `true`): in arrow text, digits right after a
+  letter or a closing bracket become subscripts (`CH2Cl2`, `Pd(PPh3)4`), while
+  amounts, temperatures and locants (`0 °C`, `1 atm`, `2,2-dimethoxypropane`)
+  and labels such as `SN2`, `E1cb` or `L1` stay as written.
+- `max_width` (pixels, default off): a row wider than this is split before
+  arrows into the fewest rows that fit, choosing the split with the most even
+  row widths. Each continuation row starts with its arrow; a stretch between
+  two arrows that is wider than `max_width` stays on one row.
+
+Each render returns `molecules` (canonical and isomeric SMILES and the InChIKey
+of every compound, plus `aligned_to` and `aligned_atoms` when a structure was
+aligned), `layout` (rows, row widths and canvas size) and `publication_checks`:
+overlapping elements, the median bond length of each structure, captions,
+titles or labels that would fall outside the canvas, and a raster check of the
+PNG. A blocking problem sets `status` to `blocked_for_publication`. As with
+mechanisms, this is a layout check, not a substitute for looking at the
+figure.
+
+`route-check --route route.json --figure-dir DIR` turns an audited route into a
+spec and draws it next to the audit (`kit.route_to_figure_spec` builds the same
+spec from Python). Compound numbers become the bold captions with the names
+underneath; reagents and catalysts go above each arrow and solvents,
+temperatures, times and atmospheres below (`split_conditions`); the steps form
+one row with `max_width` 1200, and a step that does not continue from the
+previous product starts a new row. Pass `steps_per_row` for fixed rows instead.
+Write a spec when you want to choose the rows and captions yourself, as in the
+example above.
 
 ### Optional editor integrations
 

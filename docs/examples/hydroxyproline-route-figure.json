@@ -1,0 +1,105 @@
+{
+  "style_preset": "acs",
+  "rows": [
+    {
+      "items": [
+        {
+          "label": "1",
+          "code": "hydroxyproline ester",
+          "smiles": "COC(=O)[C@@H]1C[C@@H](O)CN1"
+        },
+        {
+          "type": "arrow",
+          "label": "Boc2O, Et3N",
+          "sublabel": "CH2Cl2, rt"
+        },
+        {
+          "label": "2",
+          "code": "N-Boc",
+          "smiles": "COC(=O)[C@@H]1C[C@@H](O)CN1C(=O)OC(C)(C)C"
+        },
+        {
+          "type": "arrow",
+          "label": "ArCO2H, PPh3, DIAD",
+          "sublabel": "THF (Mitsunobu)"
+        },
+        {
+          "label": "4",
+          "code": "cis PNB ester",
+          "smiles": "COC(=O)[C@@H]1C[C@H](OC(=O)c2ccc(cc2)[N+](=O)[O-])CN1C(=O)OC(C)(C)C"
+        }
+      ]
+    },
+    {
+      "items": [
+        {
+          "type": "arrow",
+          "label": "K2CO3",
+          "sublabel": "MeOH"
+        },
+        {
+          "label": "5",
+          "code": "cis alcohol",
+          "smiles": "COC(=O)[C@@H]1C[C@H](O)CN1C(=O)OC(C)(C)C"
+        },
+        {
+          "type": "arrow",
+          "label": "MsCl, Et3N",
+          "sublabel": "CH2Cl2"
+        },
+        {
+          "label": "6",
+          "code": "cis mesylate",
+          "smiles": "COC(=O)[C@@H]1C[C@H](OS(C)(=O)=O)CN1C(=O)OC(C)(C)C"
+        },
+        {
+          "type": "arrow",
+          "label": "NaN3",
+          "sublabel": "DMF, 70 °C"
+        },
+        {
+          "label": "7",
+          "code": "trans azide",
+          "smiles": "COC(=O)[C@@H]1C[C@@H](N=[N+]=[N-])CN1C(=O)OC(C)(C)C"
+        }
+      ]
+    },
+    {
+      "items": [
+        {
+          "type": "arrow",
+          "label": "H2, Pd/C",
+          "sublabel": "MeOH"
+        },
+        {
+          "label": "8",
+          "code": "trans amine",
+          "smiles": "COC(=O)[C@@H]1C[C@@H](N)CN1C(=O)OC(C)(C)C"
+        },
+        {
+          "type": "arrow",
+          "label": "Ac2O, pyridine",
+          "sublabel": "CH2Cl2"
+        },
+        {
+          "label": "9",
+          "code": "acetamide",
+          "smiles": "COC(=O)[C@@H]1C[C@@H](NC(C)=O)CN1C(=O)OC(C)(C)C"
+        },
+        {
+          "type": "arrow",
+          "label": "LiOH",
+          "sublabel": "THF/H2O"
+        },
+        {
+          "label": "10",
+          "code": "target acid",
+          "smiles": "OC(=O)[C@@H]1C[C@@H](NC(C)=O)CN1C(=O)OC(C)(C)C"
+        }
+      ]
+    }
+  ],
+  "footnotes": [
+    "Ar = 4-nitrophenyl. Compounds and conditions from tests/fixtures/routes/hydroxyproline_double_inversion.json."
+  ]
+}
