@@ -1,310 +1,243 @@
 # Codex Organic Chemistry Assistant
 
-**English** · [中文](README.zh-CN.md)
+**English** · [简体中文](README.zh-CN.md)
 
-A local toolchain that lets an AI assistant check organic chemistry at the
-level of structures. The model reasons first. Then it tries to break its own
-answer with checks whose result differs between a right and a wrong structure,
-route or count. Structures read from images and routes about to be acted on go
-to a chemist on a review page. The final structures can be drawn as route and
-mechanism figures.
+Check organic chemistry answers against molecular structures. Compare two stereoisomers, count substitution products, or follow a stereocentre through a proposed synthesis. Once the structures are right, draw the route or mechanism as a journal-style figure. The same RDKit-based tools run locally from the command line, from Python, and through the Model Context Protocol (MCP) in Codex or Claude Code.
 
-It ships as a Python package (CLI, MCP server and kit), a skill for Claude Code
-and Codex, and a browser review workbench.
+[Quick start](#quick-start) · [Tools](#tools) · [Worked example](#worked-example) · [Figures](#figures) · [Benchmarks](#benchmarks) · [Documentation](#documentation)
 
-<p align="center">
-  <img src="docs/images/review-structures.en.png" width="860" alt="Review workbench: the source drawing of compound 2 beside the assistant's reading, after the reviewer flipped the C4 stereocentre to match the source">
-  <br>
-  <sub>The review workbench. The C4 hydroxyl was misread as a hash; one click on the centre fixed it, and the page states how the edit relates to the original. <a href="docs/images/review-structures.zh.png">中文界面</a></sub>
-</p>
-
-> This is a research assistant, not a safety authority. Treat synthetic,
-> mechanistic and computational suggestions as hypotheses that need literature
-> review and expert validation.
-
-**Contents:**
-[What is in the box](#what-is-in-the-box) ·
-[How the pieces work together](#how-the-pieces-work-together) ·
-[Features](#features) ·
-[Benchmarks](#benchmarks) ·
-[Quick start](#quick-start) ·
-[Claude Code and Codex](#using-it-from-claude-code-or-codex) ·
-[Documentation](#documentation) ·
-[Repository layout](#repository-layout) ·
-[License](#license)
-
-## What is in the box
-
-| Part | What it is | Where |
-|---|---|---|
-| Toolchain | A Python package built on RDKit: the `codex-chem` CLI, the `codex-chem-mcp` MCP server (26 tools) and `codex_organic_chem.kit` for free-form Python. Optional engines: GFN2-xTB, CREST, Open Babel and several OCSR models. | `src/codex_organic_chem` |
-| Skill | `organic-chemistry-assistant`: a reason, try-to-break-it, fix loop with a table of which check refutes which claim. Task protocols (routes, reaction outcomes, structure input, figures, kit API) are loaded on demand. A `chem-route-critic` subagent gives a route an independent second reading. | `.claude/skills`, `.agents/skills`, `.claude/agents` |
-| Review workbench | A browser page where a chemist confirms or corrects structures and routes, in English or Chinese. It needs no build step, and the corrections come back as data. | `src/codex_organic_chem/review_ui` |
-
-## How the pieces work together
-
-```mermaid
-flowchart LR
-    Q["Question, scheme<br>or exam page"] --> M["Model<br>with the skill"]
-    M --> D["Draft answer"]
-    D -- "try to break it" --> C["Checks<br>compare · enumerate<br>route-check · model-kit<br>OCSR · xTB"]
-    C -- "a fact disagrees" --> D
-    D -- "structure read from an image,<br>route about to be acted on" --> R["Review workbench"]
-    R -- "corrections as data" --> D
-    D --> F["Answer and figures"]
-```
-
-The skill tells the model which check can refute which kind of claim and how to
-read each result. The MCP server also tells the client, on connection, to load
-the skill before the first tool call.
-
-## Features
-
-### Checks that can fail
-
-Parsing a SMILES the model has just written cannot fail in an informative way.
-These checks can:
-
-| CLI / MCP tool | What it answers |
-|---|---|
-| `compare` / `chem_compare_structures` | Same compound, enantiomer, diastereomer or constitutional isomer, and which centres differ. |
-| `enumerate` / `chem_enumerate` | How many stereoisomers or substitution products, and how many symmetry-distinct C and H environments (NMR signal counts). |
-| `route-check` / `chem_route_check` | Per step: whether a reagent named in the conditions accounts for the formula change; whether each stereocentre was retained, inverted, destroyed or created, judged by spatial arrangement under an atom mapping rather than by CIP letters; which groups drawn unchanged the reagent class attacks (33 classes); which atoms cannot be traced. Per route: the last product against the target, centre by centre. |
-| `model-kit` / `chem_model_kit` | 3D questions from conformer ensembles: which face is shielded and by which atoms, whether two atoms can approach, anti-periplanar populations, planarity, whether a ring fusion can exist, which isomer is lower in energy (optionally refined with GFN2-xTB). |
-
-```bash
-uv run codex-chem compare --a "C[C@H](O)CC" --b "C[C@@H](O)CC"        # enantiomers
-uv run codex-chem enumerate --smiles "CC1CCCCC1" --task substitution   # 5 constitutional, 12 with stereo
-uv run codex-chem enumerate --smiles "OCC(O)CO" --task environments    # 2 C and 5 H environments
-uv run codex-chem route-check --example > route.json
-uv run codex-chem route-check --route route.json --issues-only
-```
-
-`blocking` issues are facts; `review` items are heuristic prompts. See
-[docs/verification-kit.md](docs/verification-kit.md) and the
-[kit API reference](.agents/skills/organic-chemistry-assistant/references/kit-api.md).
-
-### Structures from images
-
-`parse-image` runs the configured OCSR engines over several preprocessed
-variants of a crop. MolScribe is the default; DECIMER, MolGrapher, OpenChemIE,
-OSRA and ChemSchematicResolver are optional. Every candidate is kept with its
-warnings, and readings that no second engine corroborates are flagged.
-`parse-scheme` adds R-group definitions and warns about likely recognition jumps
-along a route. On a hard nine-crop test scheme none of the open-source engines
-produced an exact match. That is why, by default, every structure read from an
-image goes to the review workbench before anything is built on it.
-
-### Review workbench
-
-**Structures.** Each structure is shown next to the image it was read from,
-with the assistant's reading, its question and any alternative readings. The
-reviewer clicks a stereocentre to flip it, sets open centres and double bonds
-with R/S and E/Z buttons, edits SMILES, pastes a Molfile or draws in Ketcher.
-The page states at once how the edit relates to the original (see the image at
-the top).
-
-**Routes.** `route-review` lays out the `route-check` audit step by step, with
-changed centres highlighted on each product. Editing a structure or the
-conditions re-runs the audit at once. Each step can be marked right or wrong,
-each audit prompt answered, and the route approved or sent back.
-
-<p align="center">
-  <img src="docs/images/review-route-step.en.png" width="860" alt="Route review, step 5: an SN2 azide displacement drawn with retention, flagged by the audit">
-  <br>
-  <sub>Step 5 of the practice route: an SN2 azide displacement drawn with retention, which the audit flags.</sub>
-</p>
-
-<details>
-<summary>More screenshots, English and 中文</summary>
-
-| English | 中文 |
-|---|---|
-| [![Route overview](docs/images/review-route.en.png)](docs/images/review-route.en.png) | [![路线总览](docs/images/review-route.zh.png)](docs/images/review-route.zh.png) |
-| [![Route step](docs/images/review-route-step.en.png)](docs/images/review-route-step.en.png) | [![路线步骤](docs/images/review-route-step.zh.png)](docs/images/review-route-step.zh.png) |
-| [![Structure editor](docs/images/review-route-editor.en.png)](docs/images/review-route-editor.en.png) | [![结构编辑](docs/images/review-route-editor.zh.png)](docs/images/review-route-editor.zh.png) |
-| [![Structure review](docs/images/review-structures.en.png)](docs/images/review-structures.en.png) | [![结构校对](docs/images/review-structures.zh.png)](docs/images/review-structures.zh.png) |
-
-</details>
-
-Review sessions outlive the command that opens them: a small background server
-keeps the page up and saves every change under `~/.codex-chem/reviews/`.
-`review-mode auto|ask|off` decides whether the assistant opens the page at a
-review gate, asks first, or stays silent. `codex-chem review-demo` opens two
-practice sessions with planted mistakes (`--lang zh` for Chinese). More in
-[docs/human-review.md](docs/human-review.md).
-
-### Figures
-
-`route-figure` composes a route from reviewed structures into one SVG master and
-a PNG. `mechanism-render` draws an atom-mapped mechanism (MechanismSpec 2.1)
-with curved electron arrows. It first validates the mechanism: atoms, hydrogens
-and charges are conserved; electron moves are replayed against the next state.
-It exports SVG, CDXML, ChemDoodle, Ketcher and Marvin files, and it refuses to
-publish a figure with an arrow that has no electron source or sink.
-
-<p align="center">
-  <img src="docs/images/example-mechanism.png" width="640" alt="Cyanohydrin formation drawn by mechanism-render">
-  <br>
-  <sub>Cyanohydrin formation, one of the curated mechanism test cases. The route figure example is in <a href="docs/figures.md">docs/figures.md</a>.</sub>
-</p>
-
-### Computation and literature
-
-- RDKit: normalization, descriptors, conformers, charges, drawing.
-- GFN2-xTB: optimized geometries and energies, Fukui indices and charges,
-  frequencies and free-energy corrections. CREST: conformer ensembles with
-  populations. Both are used when installed; `codex-chem doctor` says what is
-  missing.
-- `literature-search`: OpenAlex abstracts, citation counts and open-access
-  links, with Crossref as fallback. `synthesis-suggest` is for interactive,
-  one-disconnection-at-a-time brainstorming.
-
-## Benchmarks
-
-Three questions, each measured on its own. The numbers come from our own runs;
-the benchmark harness, the problems and the run records are not part of this
-repository.
-
-### Does the model load the skill?
-
-A skill that is never loaded cannot help. In the OrgReason-Real run of
-2026-11-17, Claude Opus 5.5 loaded the skill in 3 of 18 runs. After the skill
-description was rewritten and the MCP server got instructions, it loaded the
-skill in 14 of 18.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/skill-loading.en.dark.png">
-  <img src="docs/images/skill-loading.en.light.png" width="860" alt="Bar chart: share of sessions in which the model loaded the skill, old description against new description">
-</picture>
-
-| Sessions (Opus 5.5, xhigh) | Old description | New description + MCP server instructions |
-|---|---|---|
-| OrgReason-Real olympiad items (9), loaded first | 3/18 | 16/18 (25/27 with and without the instructions) |
-| Olympiad pages written for the test (4), loaded first | 0/8 | 6/8 |
-| Other organic questions (16), loaded first | 21/32 | 25/32 |
-| Near misses that should not load it (12) | not run | 0/24 |
-| Benchmark runs, conditions D + E, used at all | 3/18 | 14/18 |
-
-The model still answers some questions on the spot without the skill (an
-isomer count, a chair conformation, the haloform reaction).
-
-### Does route-check notice a planted error?
-
-Three curated eight-step routes were corrupted one compound at a time: an
-inverted centre, a dropped wedge, an E/Z flip, a lost carbon, an extra CH₂, an
-O/N swap, a shifted substituent, an omitted last step.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/route-audit.en.dark.png">
-  <img src="docs/images/route-audit.en.light.png" width="860" alt="Bar chart: share of planted errors detected, earlier checks against route-check, by kind of error">
-</picture>
-
-| | Earlier checks (balance, normalization) | route-check, blocking or review |
-|---|---|---|
-| Planted errors that change the output | 67/282 (24%) | 280/282 (99%) |
-| False alarms on the 24 correct steps | all 24 called unbalanced | no blocking issue; 0-3 review prompts per route |
-
-This measures whether the feedback discriminates, not whether a model acts on
-it. Reproduce with `uv run python scripts/benchmark_route_check.py --output-dir outputs/route_check_benchmark`.
-
-### Does it help on real olympiad problems?
-
-OrgReason-Real uses nine organic problems from IChO 2026 and CChO 2026, sent as
-page images and graded field by field against hand-transcribed answers.
-Condition A has no tools. D adds the MCP tools and the skill. E adds an opt-in
-Python tool on top of D.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/orgreason-real.en.dark.png">
-  <img src="docs/images/orgreason-real.en.light.png" width="860" alt="Mean score per condition and dot plot of score per problem for conditions A, D and E">
-</picture>
-
-| Condition (Opus 5.5, xhigh) | Mean auto score | Skill used | Cost per run |
-|---|---|---|---|
-| A, no tools (2026-11-17) | 0.878 | – | 0.96 USD |
-| D, MCP tools + skill (2026-11-18) | 0.906 | 7/9 | 1.41 USD |
-| E, D + Python tool (2026-11-18) | 0.978 | 7/9 | 1.08 USD |
-
-Read these numbers as preliminary:
-
-- Each problem ran once per condition. Condition A alone scored 0.923 in an
-  earlier run, so a single run varies by about 0.05.
-- Five of the nine problems got full marks in every condition. Most of E's lead
-  comes from one problem (CCHO40-P4: A 0.20, D 0.40, E 1.00).
-- The gold answers are hand-transcribed and have not yet been signed off by a
-  chemist.
-- The CChO problems are copyrighted by the Chinese Chemical Society and are
-  used for internal evaluation only.
-
-Repeated runs are needed before claiming an accuracy gain.
+<img src="docs/images/review-route-step.en.png" width="860" alt="The review workbench flags step 5 of a practice route because an SN2 substitution was drawn with retention of configuration">
 
 ## Quick start
 
-The simplest way is to open the repository in Claude Code or Codex and ask it to
-install the project. [INSTALL.md](INSTALL.md) is written for that (`CLAUDE.md`
-and `AGENTS.md` point the agent to it): the agent installs the environment,
-checks it and connects the MCP server.
-
-By hand, with [uv](https://docs.astral.sh/uv/), which provides Python 3.12 and
-installs every dependency at the version pinned in `uv.lock`:
+Open this repository in Codex or Claude Code and ask it to **follow INSTALL.md and verify the installation**. For manual setup, start with [uv](https://docs.astral.sh/uv/) and run these commands from the repository root. The project uses Python 3.12 and pins its dependencies in `uv.lock`.
 
 ```bash
 uv sync --locked --extra mcp
-uv run python scripts/check_install.py    # the last line must be "install OK"
-uv run codex-chem compare --a "C[C@H](O)CC" --b "C[C@@H](O)CC"
-uv run codex-chem review-demo             # two practice review pages; --lang zh for Chinese
+uv run python scripts/check_install.py
 ```
 
-Optional engines (xTB, CREST, Open Babel, OCSR models, Ketcher) and
-troubleshooting are in [INSTALL.md](INSTALL.md).
+The last line should read `install OK`. Try comparing the two configurations of 2-butanol.
 
-## Using it from Claude Code or Codex
+```bash
+uv run codex-chem compare --a 'C[C@H](O)CC' --b 'C[C@@H](O)CC'
+```
 
-- **Claude Code:** open this repository as the working directory and approve
-  the MCP server when asked. The skill in
-  `.claude/skills/organic-chemistry-assistant` and the server in `.mcp.json`
-  are picked up automatically.
-- **Codex:** the skill lives in `.agents/skills/organic-chemistry-assistant`;
-  the MCP server entry for `~/.codex/config.toml` is in
-  [INSTALL.md](INSTALL.md#4-connect-the-mcp-server-and-the-skill).
+Look for `"relation": "enantiomers"` in the JSON output. Both structures have formula C₄H₁₀O, and their only stereocentre is inverted.
 
-Keep one copy of the skill per host. An older copy installed under the same
-name (in user skills or a synced account) is listed next to this one, and the
-model may load either. Hosts without a shell can enable the `chem_python` MCP
-tool with `CODEX_CHEM_ENABLE_PYTHON=1`. Details:
-[docs/skills-and-mcp.md](docs/skills-and-mcp.md).
+**Using an assistant.** Claude Code discovers the project skill and reads the server definition in `.mcp.json`. Approve the server when prompted. In Codex, the skill is in `.agents/skills/`. Add the MCP server entry to `~/.codex/config.toml` using the absolute path of your checkout. [Connection instructions](INSTALL.md#4-connect-the-mcp-server-and-the-skill)
+
+## Tools
+
+The `organic-chemistry-assistant` skill helps the model choose a check for the claim it has made. You can also run the commands yourself or import `codex_organic_chem.kit` from Python.
+
+| Question | Command | What to look for |
+|---|---|---|
+| How do these structures differ? | `compare` | Whether they are identical, enantiomers, diastereomers or constitutional isomers, and which stereocentres differ. |
+| How many possibilities are there? | `enumerate` | Stereoisomers, substitution products, or symmetry-distinct carbon and hydrogen environments for NMR. |
+| Are the drawn intermediates consistent with the stated conditions? | `route-check` | Formula changes, mapped stereocentres, functional groups that may react, and the final product’s relationship to the target. |
+| Which face is more crowded? Can two atoms approach? | `model-kit` | Blocking atoms, distances and dihedral angles across a ground-state conformer ensemble. |
+| What structure is drawn in this image? | `parse-image`, `parse-scheme` | Candidate structures from configured optical chemical structure recognition (OCSR) engines. The review workbench displays each candidate beside the source for correction. |
+| How can I draw a route or mechanism? | `route-figure`, `mechanism-validate`, `mechanism-render` | Multi-step schemes with one bond length throughout, as SVG and PNG, or mechanisms with atom-mapped electron arrows. Mechanism validation checks hydrogen and charge conservation and replays supported electron moves. [Figures](#figures) |
+
+Optional engines add GFN2-xTB energy calculations, CREST conformer searches, Open Babel file conversion and image recognition. Run `uv run codex-chem doctor` to see which are installed. For literature, `literature-search` queries OpenAlex with Crossref as a fallback. [External tool setup](docs/external-tools.md)
+
+## Worked example
+
+**`route-check` takes a proposed synthesis as input.** Supply the target, numbered compounds as SMILES, and the reactants, product and conditions for each step. The eight-step hydroxyproline example shows what the audit examines. [Example input](tests/fixtures/routes/hydroxyproline_double_inversion.json) · [Route figure](#figures)
+
+1. **Where did the atoms go?** The audit calculates which atoms were gained or lost and looks for a transformation consistent with that change and the named reagents. If reagent and byproduct structures are supplied, it includes them in the element and charge balance.
+2. **What happened at the same stereocentre?** The tool maps atoms from reactant to product and follows the spatial arrangement of substituents to identify retention or inversion. An R/S label can change simply because substituent priorities changed.
+3. **Which features of the drawing need an explanation?** The audit flags groups drawn unchanged under conditions that could affect them. It also compares the final product with the target centre by centre. In step 3, for example, only one of two esters reacts, so the report asks what accounts for the selectivity.
+
+In Codex or Claude Code, give the assistant the route file and a question.
+
+> Check `tests/fixtures/routes/hydroxyproline_double_inversion.json`. At which steps does C4 invert, and which selectivity questions still need review?
+
+You can run the same audit from the command line.
+
+```bash
+uv run codex-chem route-check \
+  --route tests/fixtures/routes/hydroxyproline_double_inversion.json --issues-only
+```
+
+In the reference route, C4 inverts at **steps 2 and 5**. The final product matches the target (`final_vs_target.relation` is `identical`). The audit reports zero `blocking` issues and three `review` prompts. A blocking issue is a conflict visible in the input, such as a final product with the wrong configuration. A review prompt is a question raised by atom mapping or reagent rules, such as the ester selectivity above. Experimental feasibility still needs literature or experimental evidence.
+
+**What if just one intermediate is drawn incorrectly?** The command below opens two practice sessions. The route session changes only C4 of compound 7. The final product still matches the target, but two new `review` prompts appear. Step 5 now shows retention for an S<sub>N</sub>2 substitution expected to invert. In step 6, C4 appears to invert even though its bonded neighbours stay the same. Flip C4 of compound 7 back and apply the edit. Both prompts disappear.
+
+```bash
+uv run codex-chem review-demo --lang en
+```
+
+<details>
+<summary>See compound 2 beside its source drawing</summary>
+
+<img src="docs/images/review-structures.en.png" width="760" alt="Structure review showing the source drawing of compound 2 beside the corrected stereocentre">
+
+</details>
+
+The workbench saves edits locally under `~/.codex-chem/reviews/` and returns them to the assistant. Its built-in editor supports stereocentre flips, R/S and E/Z assignments, SMILES and Molfile input. [Review controls and screenshots](docs/human-review.md)
+
+## Figures
+
+**Draw the route you checked.** `route-figure` lays out structures and reaction conditions from a JSON spec as a multi-step scheme. The scheme below is the hydroxyproline route from the worked example, drawn with the ACS preset from [this spec](docs/examples/hydroxyproline-route-figure.json). [SVG master](docs/images/example-route-figure.svg)
+
+<img src="docs/images/example-route-figure.png" width="760" alt="Eight-step hydroxyproline route drawn by route-figure: nine structures with the same bond length, reagents above and conditions below each arrow, and a bold number under each compound">
+
+- **One drawing, not a collage.** Every structure has the same bond length, line width and font size, whatever its size. Presets set these proportions for ACS- or RSC-style figures (`acs`, `rsc`) or for slides (`presentation`).
+- **The core stays put.** Each structure given as SMILES is laid out with the part it shares with an earlier structure held at the same coordinates. In the scheme above, the Boc-protected pyrrolidine keeps its orientation through all nine structures. A Molfile keeps the layout from your editor and is only straightened.
+- **Structures are parsed before they are drawn.** RDKit reads each SMILES or Molfile, and the result lists the canonical SMILES and InChIKey of every compound, so you can confirm the figure shows the structures you checked. Wedges and hashes come from the stereochemistry in the input.
+- **The layout follows the structures.** Each cell is sized to its structure and caption, each arrow widens to fit its text, and digits in formulas such as `CH2Cl2` become subscripts. Under each structure go a bold label, usually the compound number, and an optional grey line such as a name, wrapped when it is long. With `max_width`, a long sequence wraps at arrows into rows of similar width.
+- **An audit before `ok`.** Every render checks for overlapping elements, uneven bond lengths and text that would be clipped. Any problem turns the status into `ok_with_warnings` or `blocked_for_publication`.
+- **SVG first.** The SVG is the master for further editing. A PNG preview is also written when Chrome, Inkscape, ImageMagick or rsvg-convert is installed.
+
+Describe the scheme to the assistant, or point it at a route file.
+
+> Draw `tests/fixtures/routes/hydroxyproline_double_inversion.json` as an ACS-style scheme with three steps per row, reagents above the arrows and solvent and temperature below.
+
+To draw the scheme above from the command line, run:
+
+```bash
+uv run codex-chem route-figure --spec docs/examples/hydroxyproline-route-figure.json \
+  --output-dir outputs/route_figure --format svg --format png
+```
+
+<details>
+<summary>What a route spec looks like</summary>
+
+```json
+{
+  "style_preset": "acs",
+  "rows": [
+    {
+      "items": [
+        {"label": "1", "code": "hydroxyproline ester", "smiles": "COC(=O)[C@@H]1C[C@@H](O)CN1"},
+        {"type": "arrow", "label": "Boc2O, Et3N", "sublabel": "CH2Cl2, rt"},
+        {"label": "2", "code": "N-Boc", "smiles": "COC(=O)[C@@H]1C[C@@H](O)CN1C(=O)OC(C)(C)C"}
+      ]
+    }
+  ],
+  "footnotes": ["Ar = 4-nitrophenyl."]
+}
+```
+
+Rows are drawn left to right, top to bottom. `label` is the bold line under a structure and `code` the grey line below it. A row can also contain `plus` and short `text` items. Add `"max_width": 1100` to wrap long rows at arrows. Core alignment and subscripts are on by default; `"align_structures": false` and `"subscript_formulas": false` turn them off. `uv run codex-chem route-figure --example` prints a complete spec.
+
+</details>
+
+`route-check --figure-dir DIR` draws an audited route in the same run, with no spec to write. Compound numbers are bold with the names underneath, reagents go above each arrow and solvent and temperature below, and the steps wrap into rows of similar width. Write a spec when you want to choose the rows and captions yourself.
+
+**Mechanisms.** `mechanism-render` draws curved-arrow mechanisms from an atom-mapped spec. Each arrow starts at a lone pair or a bond and ends at an atom or a bond. `mechanism-validate` replays the electron moves of each step and checks hydrogen and charge conservation before anything is drawn. Besides the SVG, the renderer writes CDXML for ChemDraw, ChemDoodle JSON and a step-by-step trace. [Mechanism and route figures](docs/figures.md)
+
+<img src="docs/images/example-mechanism.png" width="680" alt="Cyanohydrin formation drawn by mechanism-render: cyanide adds to formaldehyde, then HCN protonates the alkoxide">
+
+## Benchmarks
+
+When a problem gives the number of monosubstitution products, an assistant can enumerate those products for each candidate skeleton and rule out structures that give the wrong count. When it drafts a synthesis, it can trace a stereocentre to find the intermediate that needs redrawing. We built structure checks for these tasks and wrote a skill that tells the model when to use them and how to revise an answer.
+
+### How often does the model use the skill?
+
+We rewrote the skill description to include olympiad problems, page images and familiar-looking structure questions. The MCP server also reminds the model to load the skill on connection. The aim is for the model to choose a check, such as `enumerate` for an isomer count, while it is still working out the answer.
+
+This works for some kinds of question and not yet for others. In a trigger test on olympiad items (panel a), Claude Opus 5.5 loaded the skill **as its first action** in 3/18 sessions with the old description and 16/18 with the revised description and server reminder. The revised description alone gave 9/9, so the reminder’s additional contribution is uncertain. On similarly worded questions outside the skill’s scope, it loaded the skill first in 0/24 sessions. In benchmark runs with tools (panel b), **skill use at any point** on the olympiad pages rose from 3/18 to 14/18. On the [oMeBench](#do-the-checks-help-on-public-benchmarks) mechanism prompts, which assign a persona, require strict JSON and give the product, the same configuration used the skill in only **4/34** runs, while GPT-6.2 Astra in Codex read it in all 34. The description reaches exam-style and open questions, but not tightly formatted benchmark prompts.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/skill-loading.en.dark.png">
+  <img src="docs/images/skill-loading.en.light.png" width="860" alt="Panel a: share of trigger-test sessions that loaded the skill first, by question type, old and current description. Panel b: share of benchmark runs with tools that used the skill, olympiad and oMeBench, with 95% intervals">
+</picture>
+
+### Does a single route error give the model something to investigate?
+
+Flipping a wedge can leave a structure perfectly readable, with the same formula and charge. By mapping atoms and tracking configuration across each step, the audit can point out unexpected retention or inversion and give the model a specific intermediate to revisit.
+
+Starting from three eight-step reference routes, we generated **282 variants** with one edit apiece, such as inverting a stereocentre, moving a substituent or omitting the last step. Each variant was compared with its own unmodified route. The earlier tools normalized each structure and checked the balance between the listed reactants and the main product. With the steps written in this abbreviated form, they flagged all 24 unmodified steps as unbalanced. [Benchmark script](scripts/benchmark_route_check.py)
+
+| Edit | Earlier tools produced a different normalization warning or balance status | `route-check` produced a new `blocking` issue or `review` prompt |
+|---|---:|---:|
+| All variants | 67/282 | **280/282** |
+| Invert one stereocentre | 0/36 | 35/36 |
+| Move a substituent to the adjacent carbon | 16/27 | 27/27 |
+
+Of the 280 variants that produced a new diagnostic, **83** introduced a blocking issue. The reference routes had zero blocking issues and zero to three review prompts per route. Any new diagnostic at either severity counts. Establishing whether it identifies the planted error or helps an assistant repair the route would require scoring the diagnosis and the repair.
+
+```bash
+uv run python scripts/benchmark_route_check.py --output-dir outputs/route_check_benchmark
+```
+
+<details>
+<summary>Detection rate for every kind of edit, with 95% intervals</summary>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/route-audit.en.dark.png">
+  <img src="docs/images/route-audit.en.light.png" width="860" alt="Share of planted route errors that changed the output of the earlier checks and of route-check, for each kind of edit, with 95% Wilson intervals">
+</picture>
+
+</details>
+
+### Do the checks help the model solve whole problems?
+
+In our internal OrgReason-Real evaluation, Claude Opus 5.5 (xhigh) received page images of nine IChO and CChO organic chemistry problems. Answers were auto-graded field by field, with one run per problem and condition. We ran A on November 17, 2026 and D and E the following day. Condition D provided the predefined checks. Condition E also let the model write Python with RDKit to test a question specific to the problem.
+
+| Condition | Mean auto-graded score | Runs using the skill | Mean cost per run |
+|---|---:|---:|---:|
+| A · No tools | 0.878 | — | $0.96 |
+| D · MCP tools and skill | 0.906 | 7/9 | $1.41 |
+| E · D plus the optional Python tool | 0.978 | 7/9 | $1.08 |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/orgreason-real.en.dark.png">
+  <img src="docs/images/orgreason-real.en.light.png" width="860" alt="Panel a: mean olympiad score for conditions A, D and E with 95% bootstrap intervals, one dot per problem, and the skill-use rate and cost per run under each bar. Panel b: score per problem">
+</picture>
+
+One polycyclic hydrocarbon problem, CCHO40-P4, illustrates what a custom check made possible. In E, the model cropped the structures from the page, built a molecular graph from the drawing, and used RDKit to enumerate and deduplicate candidate structures. The scores on this problem were 0.20 (A), 0.40 (D) and 1.00 (E). It accounted for most of the gap between D and E.
+
+Five of the nine problems received full marks under every condition. An earlier no-tools run averaged 0.923, and the hand-transcribed answers used for grading still await chemist review. Estimating a repeatable gain, or the contribution of an individual tool such as `route-check`, would require repeated runs and comparisons with that tool enabled and disabled. The olympiad harness, problems and run records are internal. The Chinese Chemical Society’s CChO problems are used only for internal evaluation.
+
+### Do the checks help on public benchmarks?
+
+[oMeBench](https://arxiv.org/abs/2510.07731) asks for a reaction mechanism as a list of intermediates and scores it step by step against a reference mechanism (S<sub>total</sub>, from 0 to 1). Before comparing conditions, we checked the reference mechanisms with rules that do not depend on any model's answers: atoms must balance at every step, the last intermediate must be the given product, and valences and radicals must be plausible. 51 of the 196 reference mechanisms failed, including 6 of the 23 hard ones. Both models answered the 17 hard reactions that passed, once per reaction and condition, on November 21 and 22, 2026.
+
+| Model | Condition | Mean S<sub>total</sub> | Runs that loaded the skill | Mean cost per run |
+|---|---|---:|---:|---:|
+| Claude Opus 5.5 (xhigh) | A · No tools | 0.498 | — | $0.11 |
+| | D · MCP tools and skill | 0.510 | 3/17 | $0.17 |
+| | E · D plus the optional Python tool | 0.496 | 1/17 | $0.16 |
+| GPT-6.2 Astra (xhigh) in Codex | A · No tools | 0.419 | — | not reported |
+| | D · MCP tools and skill | 0.412 | 17/17 | not reported |
+| | E · D plus the optional Python tool | 0.433 | 17/17 | not reported |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/omebench.en.dark.png">
+  <img src="docs/images/omebench.en.light.png" width="860" alt="oMeBench scores for conditions A, D and E, panel a Claude Opus 5.5 and panel b GPT-6.2 Astra, with 95% bootstrap intervals, one dot per reaction, and the skill-use rate and cost per run under each bar">
+</picture>
+
+Neither model scored measurably higher with the tools. D minus A was +0.01 for Opus (95% bootstrap interval −0.07 to +0.11) and −0.01 for Astra (−0.06 to +0.05). The two models differ in how often they loaded the skill. Opus usually answered the formatted prompt directly. In the four runs where it loaded the skill, it compared structures, analysed the reaction or ran Python, but never called `mechanism-validate`, probably because the skill presents mechanism validation for curved-arrow figures while oMeBench asks for a list of intermediates. Astra read the skill in every tool-enabled run and still showed no gain. Single runs are noisy: two condition A runs of Opus on the same 17 reactions averaged 0.511 and 0.498, but individual reactions moved by 0.107 on average, so effects smaller than about 0.1 need repeated runs.
+
+The figure below puts both benchmarks on one scale: the change from A to D and from A to E on the same items. On oMeBench, all four intervals span zero. On the olympiad, both intervals start at zero: 7 of the 9 problems scored the same in D as in A, and 6 of 9 in E, so the mean gain rests on two or three problems, mostly CCHO40-P4.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/tool-effect.en.dark.png">
+  <img src="docs/images/tool-effect.en.light.png" width="860" alt="Paired difference from condition A for D and E, with 95% bootstrap intervals, for the olympiad (Claude Opus 5.5) and oMeBench (Claude Opus 5.5 and GPT-6.2 Astra), with skill-use rate and cost per run for each row">
+</picture>
+
+**Probes that were too easy.** Before running every condition on a benchmark, we check whether the model already solves it without tools. Three candidates came close to full marks, so they cannot show what the tools add. Each probe used 20 items drawn with a fixed seed by rules set before any run: SUPERChem questions whose text or options contain an organic structure, and two items from each of ten size bands of ChemIQ’s 2D NMR set.
+
+| Benchmark (20 items) | Claude Opus 5.5, no tools | GPT-6.2 Astra, no tools |
+|---|---:|---:|
+| [SUPERChem](https://arxiv.org/abs/2512.01274) organic multiple choice, structures given as SMILES | 19/20 | 17/20 |
+| The same SUPERChem items, structures given as images | 17/20 | — |
+| [ChemIQ](https://github.com/oxpig/ChemIQ) structure from the formula and ¹H, ¹³C, COSY, HSQC and HMBC data | 19/20 | — |
+
+In the image version, one of the three misses was a run that an API safety filter stopped before it answered. For the 2D NMR set, the ChemIQ authors report 20% for the best model they tested. All three benchmarks were public before these models’ training cutoffs, so we cannot tell how much of the high scores comes from the models having seen the questions. The skill and tool conditions were not run on these sets. As with the olympiad, the harness and run records are internal; the benchmarks themselves are public.
 
 ## Documentation
 
-| Topic | Where |
-|---|---|
-| Verification kit, route checking, synthesis suggestions | [docs/verification-kit.md](docs/verification-kit.md) |
-| Skills, MCP server, tool list | [docs/skills-and-mcp.md](docs/skills-and-mcp.md) |
-| Review workbench | [docs/human-review.md](docs/human-review.md) |
-| Mechanism and route figures, editor integrations | [docs/figures.md](docs/figures.md) |
-| Optional engines (xTB, CREST, OCSR, ChemDraw, Ketcher ...) | [docs/external-tools.md](docs/external-tools.md) |
-| Kit API and the skill's task protocols | [.agents/skills/organic-chemistry-assistant/references](.agents/skills/organic-chemistry-assistant/references) |
-| Dependencies and licensing | [DEPENDENCIES.md](DEPENDENCIES.md), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
-| Changes | [CHANGELOG.md](CHANGELOG.md) |
-
-## Repository layout
-
-```text
-src/codex_organic_chem/      CLI, MCP server, kit, review workbench (review_ui/)
-.claude/skills/              the skill for Claude Code
-.claude/agents/              chem-route-critic subagent
-.agents/skills/              the same skill for Codex
-integrations/ketcher/        optional Ketcher editor for the review page
-integrations/chemdoodle/     optional ChemDoodle Web Components viewer
-scripts/                     installers, tool benchmarks, OCSR adapters, README figures
-docs/                        detailed documentation and images
-tests/                       pytest suite
-```
+- [Installation and troubleshooting](INSTALL.md) covers the environment, host configuration and install checks.
+- [Verification kit](docs/verification-kit.md) covers structure comparison, enumeration, route audits, conformer analysis and stepwise synthesis suggestions. The [Python API reference](.agents/skills/organic-chemistry-assistant/references/kit-api.md) describes arguments and return values.
+- [Skills and MCP tools](docs/skills-and-mcp.md) lists the tools, the optional Python tool and the Claude Code route-review subagent.
+- [Mechanism and route figures](docs/figures.md) includes worked examples, SVG and CDXML output, and editor integrations.
+- [Dependencies](DEPENDENCIES.md) and the [changelog](CHANGELOG.md) document package requirements and release history.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The optional ChemDoodle Web Components files are
-third-party GPLv3/commercial files; see
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The charts in this README are
-drawn by `scripts/make_readme_figures.py`.
+The project uses the [MIT License](LICENSE). The bundled ChemDoodle Web Components use GPLv3 or a separate commercial license from iChemLabs. [Third-party notices](THIRD_PARTY_NOTICES.md)
