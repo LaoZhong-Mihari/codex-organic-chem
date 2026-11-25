@@ -1,6 +1,6 @@
 [project]
 name = "codex-organic-chem"
-version = "1.1.0"
+version = "1.2.0"
 description = "Local open-source organic chemistry verification and figure toolchain for Codex and Claude Code: stereochemistry & isomer audits, route-check, stepwise mechanism checks, 3D model-kit, OCSR, and ACS/RSC scheme & curved-arrow rendering."
 readme = "README.md"
 requires-python = ">=3.12"

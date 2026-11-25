@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-25
+
 ### Added
 
 - `mechanism-steps-check` / `chem_mechanism_steps_check` / `kit.mechanism_steps_check`:
@@ -62,6 +64,8 @@ All notable changes to this project are documented here.
   parsing, scrubbed secret env vars and killed process groups on timeout in
   `chem_python`, added `flock` daemon startup locking, and preserved unfocused
   drafts in `workbench.html`.
+- Bind the local review server directly to its numeric loopback address to
+  avoid reverse DNS delaying startup on macOS.
 - Fixed stereocentre inversion during `scheme_ocsr.resolve_placeholders`,
   corrected `MEM` (`*COCCOC`) vs `MEMO` (`*OCOCCOC`) attachment and MolScribe
   `@`/`@@` chiral direction, added UFF fallback for boron/silicon in

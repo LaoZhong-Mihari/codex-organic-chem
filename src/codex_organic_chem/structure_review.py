@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
@@ -231,6 +232,12 @@ _LAST_ACTIVITY = time.time()
 
 class ReviewHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
+
+    def server_bind(self) -> None:
+        # The review server uses a numeric loopback address. The standard
+        # HTTPServer bind also does a reverse lookup, which can delay startup.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 def _utc_iso(timestamp: float) -> str:

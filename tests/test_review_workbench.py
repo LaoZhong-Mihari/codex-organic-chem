@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -251,6 +252,16 @@ def test_review_mode_decides_whether_the_page_opens(monkeypatch):
 
 
 # ---------------------------------------------------- detached review server
+
+
+def test_review_server_binds_loopback_without_resolving_hostname(monkeypatch):
+    def unexpected_lookup(*args):
+        pytest.fail("Starting the local review server must not use reverse DNS")
+
+    monkeypatch.setattr(socket, "getfqdn", unexpected_lookup)
+    with sr.ReviewHTTPServer(("127.0.0.1", 0), sr.ReviewRequestHandler) as server:
+        assert server.server_name == "127.0.0.1"
+        assert server.server_port == server.server_address[1] > 0
 
 
 def _cli(*args: str) -> subprocess.CompletedProcess:
