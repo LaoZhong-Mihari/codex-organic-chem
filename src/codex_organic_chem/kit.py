@@ -16,6 +16,8 @@ check the question needs instead of reasoning about a count, a formula or a
 
 from __future__ import annotations
 
+from .image_tools import crop_image
+from .mechanism_steps import mechanism_steps_check
 from .model_kit import (
     atom_table,
     build_ensemble,
@@ -44,21 +46,28 @@ from .structure_compare import (
     symmetry_environments,
 )
 
+face_accessibility = face
+compare_structures = compare
+
 __all__ = [
     "StructureError",
     "atom_table",
     "build_ensemble",
     "cis_trans",
     "compare",
+    "compare_structures",
+    "crop_image",
     "dihedral",
     "distance",
     "embed_check",
     "enumerate_stereoisomers",
     "face",
+    "face_accessibility",
     "functional_groups",
     "interpret_delta",
     "isomer_energies",
     "map_reactant_to_product",
+    "mechanism_steps_check",
     "planarity",
     "route_check",
     "route_check_example",

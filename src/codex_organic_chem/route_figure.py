@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -71,7 +72,7 @@ ALIGN_MAX_BOND_RATIO = 1.3
 _SUBSCRIPT = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
 _FORMULA_DIGITS = re.compile(r"(?<=[A-Za-z)\]])\d+")
 # Tokens whose digits are not atom counts: mechanism labels (SN2, SN1', E1cb) and
-# numbered ligands, catalysts or substituents (L1, R2, X1, G2, HG2).
+# numbered ligands, catalysts or substituents (L1, R2, X1, G2, HG2, XPhos-Pd-G3).
 _NOT_FORMULA = re.compile(r"^(?:S[NE]\d'?|E\d(?:cb)?|H?G\d|[LRX]\d+[a-z]?)$")
 
 
@@ -108,14 +109,22 @@ def subscript_formulas(text: str) -> str:
 
     Only digits right after a letter or a closing bracket change, so amounts,
     temperatures and locants (0 °C, 1 atm, 10 mol%, 2,2-dimethoxypropane) stay
-    as written, and so do mechanism labels and numbered ligands (SN2, E1cb, L1).
+    as written, and so do mechanism labels and numbered ligands/precatalysts
+    (SN2, E1cb, L1, XPhos-Pd-G3).
     """
+
+    def fix_subtoken(sub: str) -> str:
+        if _NOT_FORMULA.match(sub.strip("()[]{}.:")):
+            return sub
+        return _FORMULA_DIGITS.sub(lambda digits: digits.group(0).translate(_SUBSCRIPT), sub)
 
     def fix(match: re.Match[str]) -> str:
         token = match.group(0)
         if _NOT_FORMULA.match(token.strip("()[]{}.:")):
             return token
-        return _FORMULA_DIGITS.sub(lambda digits: digits.group(0).translate(_SUBSCRIPT), token)
+        if "-" in token:
+            return "-".join(fix_subtoken(part) for part in token.split("-"))
+        return fix_subtoken(token)
 
     return re.sub(r"[^\s,;/]+", fix, text)
 
@@ -222,14 +231,17 @@ def _prepare_row(
     if not isinstance(items, list) or not items:
         raise ValueError("Each route figure row requires a non-empty 'items' list.")
     prepared_items: list[dict[str, Any]] = []
+    after_plus = False
     for raw in items:
         if not isinstance(raw, dict):
             raise ValueError("Route figure row items must be objects.")
         item_type = raw.get("type") or ("molecule" if raw.get("smiles") or raw.get("molfile") else None)
         if item_type == "molecule":
-            prepared = _prepare_molecule(raw, preset, previous if options["align"] else None)
+            prepared = _prepare_molecule(raw, preset, previous if (options["align"] and not after_plus) else None)
             prepared_items.append(prepared)
-            previous.append({"mol": prepared["mol"], "name": prepared["label"] or prepared["id"] or prepared["code"]})
+            if not after_plus:
+                previous.append({"mol": prepared["mol"], "name": prepared["label"] or prepared["id"] or prepared["code"]})
+            after_plus = False
             record = prepared["record"]
             entry = {
                 "id": prepared.get("id"),
@@ -248,6 +260,7 @@ def _prepare_row(
             warnings.extend(record.get("warnings", []))
             warnings.extend(prepared["depiction"].warnings)
         elif item_type == "arrow":
+            after_plus = False
             label = str(raw.get("label", ""))
             sublabel = str(raw.get("sublabel") or raw.get("label2") or "")
             if options["subscripts"]:
@@ -255,34 +268,49 @@ def _prepare_row(
             width = int(raw.get("width", 0)) or _arrow_width_for(label, sublabel)
             prepared_items.append({"type": "arrow", "label": label, "sublabel": sublabel, "width": width})
         elif item_type == "plus":
+            after_plus = True
             prepared_items.append({"type": "plus", "width": int(raw.get("width", 44))})
         elif item_type == "text":
+            after_plus = False
             text = str(raw.get("text", ""))
-            width = int(raw.get("width", 0)) or max(60, int(len(text) * 14 * CHAR_W) + 24)
+            width = int(raw.get("width", 0)) or max(60, int(_text_width(text, 14)) + 24)
             prepared_items.append({"type": "text", "text": text, "width": width})
         else:
             raise ValueError("Route figure item requires type 'molecule', 'arrow', 'plus', or 'text'.")
     return {"items": prepared_items, "note": row.get("note")}
 
 
+def _is_wide_char(ch: str) -> bool:
+    return unicodedata.east_asian_width(ch) in {"W", "F"}
+
+
 def _arrow_width_for(label: str, sublabel: str) -> int:
     # The arrow must clear its own condition labels, or long reagent lines
     # spill onto the neighbouring structures.
-    longest = max(len(label), len(sublabel))
-    return max(ARROW_DEFAULT_WIDTH, int(longest * 14 * CHAR_W) + 36)
+    longest_px = max(_text_width(label, 14), _text_width(sublabel, 14))
+    return max(ARROW_DEFAULT_WIDTH, int(math.ceil(longest_px)) + 36)
 
 
 def _text_width(text: str, px: float, bold: bool = False) -> float:
-    return len(text) * px * (CHAR_W_BOLD if bold else CHAR_W)
+    narrow = CHAR_W_BOLD if bold else CHAR_W
+    wide = 1.04 if bold else 1.0
+    return sum((wide if _is_wide_char(ch) else narrow) * px for ch in text)
 
 
 def _wrap_caption(text: str, px: float, max_px: float, bold: bool = False) -> list[str]:
-    """Greedy word wrap; a word longer than a line is broken after its hyphens."""
+    """Greedy word wrap; breaks after hyphens or between wide CJK characters when needed."""
     lines: list[str] = []
     for word in text.split():
-        parts = re.findall(r"[^-]*-|[^-]+$", word) if _text_width(word, px, bold) > max_px else [word]
+        if _text_width(word, px, bold) > max_px:
+            if any(_is_wide_char(ch) for ch in word):
+                parts = list(word)
+            else:
+                parts = re.findall(r"[^-]*-|[^-]+$", word)
+        else:
+            parts = [word]
         for index, part in enumerate(parts):
-            joined = lines[-1] + ("" if index else " ") + part if lines else part
+            sep = "" if index else " "
+            joined = lines[-1] + sep + part if lines else part
             if lines and _text_width(joined, px, bold) <= max_px:
                 lines[-1] = joined
             else:
@@ -352,18 +380,38 @@ def _prepare_molecule(raw: dict[str, Any], preset: dict[str, Any], previous: lis
     }
 
 
+_BULKY_PG_SMARTS = (
+    "[CH2][CH]1c2ccccc2-c2ccccc12",  # Fmoc fluorenylmethyl
+    "C(c1ccccc1)(c1ccccc1)c1ccccc1",  # Trityl
+    "[Si](c1ccccc1)(c1ccccc1)C([CH3])([CH3])[CH3]",  # TBDPS
+)
+
+
+def _bulky_pg_atoms(mol: Any) -> set[int]:
+    from rdkit import Chem
+
+    atoms: set[int] = set()
+    for smarts in _BULKY_PG_SMARTS:
+        patt = Chem.MolFromSmarts(smarts)
+        if patt is not None:
+            for match in mol.GetSubstructMatches(patt):
+                atoms.update(match)
+    return atoms
+
+
 def _align_to_previous(mol: Any, previous: list[dict[str, Any]]) -> tuple[Any | None, dict[str, Any] | None]:
     """Lay out ``mol`` with the part it shares with an earlier structure held at that structure's coordinates.
 
-    The template is whichever of the last few structures shares the most atoms
-    (complete rings only). Returns ``(None, None)`` when nothing substantial is
-    shared or the constrained layout comes out cramped or uneven, in which case
-    the caller lays the structure out from scratch.
+    The template is whichever of the last few structures shares the most core
+    atoms (complete rings only, deprioritising bulky Fmoc/Tr/TBDPS protecting
+    groups when a non-PG scaffold is shared). Returns ``(None, None)`` when
+    nothing substantial is shared or the constrained layout comes out cramped.
     """
     from rdkit import Chem
     from rdkit.Chem import rdDepictor, rdFMCS
 
-    best: tuple[int, dict[str, Any], str] | None = None
+    mol_pg = _bulky_pg_atoms(mol)
+    best: tuple[tuple[int, int], dict[str, Any], str] | None = None
     for entry in reversed(previous[-ALIGN_LOOKBACK:]):
         reference = entry["mol"]
         try:
@@ -375,8 +423,20 @@ def _align_to_previous(mol: Any, previous: list[dict[str, Any]]) -> tuple[Any | 
         smaller = min(reference.GetNumHeavyAtoms(), mol.GetNumHeavyAtoms())
         if result.numAtoms < ALIGN_MIN_ATOMS or result.numAtoms < ALIGN_MIN_FRACTION * smaller:
             continue
-        if best is None or result.numAtoms > best[0]:
-            best = (result.numAtoms, entry, result.smartsString)
+        q_cand = Chem.MolFromSmarts(result.smartsString)
+        non_pg_score = result.numAtoms
+        if q_cand is not None and mol_pg:
+            m_match = mol.GetSubstructMatch(q_cand)
+            if m_match:
+                non_pg = sum(1 for idx in m_match if idx not in mol_pg)
+                if non_pg >= ALIGN_MIN_ATOMS:
+                    non_pg_score = non_pg
+                elif mol.GetNumHeavyAtoms() - len(mol_pg) >= ALIGN_MIN_ATOMS:
+                    # Matched ONLY the bulky protecting group while the scaffolds differ!
+                    continue
+        rank_key = (non_pg_score, result.numAtoms)
+        if best is None or rank_key > best[0]:
+            best = (rank_key, entry, result.smartsString)
     if best is None:
         return None, None
     _, entry, smarts = best
@@ -388,10 +448,51 @@ def _align_to_previous(mol: Any, previous: list[dict[str, Any]]) -> tuple[Any | 
     for idx in range(template.GetNumAtoms()):
         point = conf.GetAtomPosition(idx)
         conf.SetAtomPosition(idx, (point.x * RDKIT_DEPICT_BOND, point.y * RDKIT_DEPICT_BOND, 0.0))
+    query = Chem.MolFromSmarts(smarts)
+    if query is None:
+        return None, None
+    # Try symmetry-distinct core mappings on symmetric rings so unshared substituents do not flip 180 deg.
+    t_matches = list(template.GetSubstructMatches(query, uniquify=False, maxMatches=8))
+    a_matches = list(aligned_base := Chem.Mol(mol)).GetSubstructMatches(query, uniquify=True, maxMatches=4) if False else list(mol.GetSubstructMatches(query, uniquify=True, maxMatches=4))
+    best_aligned: Any | None = None
+    best_cost: float = float("inf")
+    best_n_pairs = 0
+    tried_explicit = False
+    if t_matches and a_matches and (len(t_matches) > 1 or len(a_matches) > 1):
+        t_deg_extra = {idx: template.GetAtomWithIdx(idx).GetDegree() for idx in range(template.GetNumAtoms())}
+        for t_m in t_matches[:6]:
+            for a_m in a_matches[:4]:
+                trial = Chem.Mol(mol)
+                trial.RemoveAllConformers()
+                cmap = [(t_m[k], a_m[k]) for k in range(len(t_m))]
+                try:
+                    rdDepictor.GenerateDepictionMatching2DStructure(trial, template, cmap)
+                except Exception:
+                    continue
+                if trial.GetNumConformers() == 0:
+                    continue
+                _normalize_bond_units(trial)
+                if _layout_is_poor(trial):
+                    continue
+                tried_explicit = True
+                # Prefer mapping where substituted ring/chain positions align with substituted template positions
+                mismatch = sum(
+                    abs(t_deg_extra[t_m[k]] - mol.GetAtomWithIdx(a_m[k]).GetDegree()) for k in range(len(t_m))
+                )
+                if mismatch < best_cost:
+                    best_cost = mismatch
+                    best_aligned = trial
+                    best_n_pairs = len(cmap)
+                    if mismatch == 0:
+                        break
+            if best_cost == 0:
+                break
+    if best_aligned is not None:
+        return best_aligned, {"aligned_to": entry["name"], "aligned_atoms": best_n_pairs}
     aligned = Chem.Mol(mol)
     aligned.RemoveAllConformers()
     try:
-        pairs = rdDepictor.GenerateDepictionMatching2DStructure(aligned, template, -1, Chem.MolFromSmarts(smarts))
+        pairs = rdDepictor.GenerateDepictionMatching2DStructure(aligned, template, -1, query)
     except Exception:
         return None, None
     if not pairs or aligned.GetNumConformers() == 0:
@@ -496,10 +597,16 @@ def _compose_svg(
     footnotes = [str(note) for note in spec.get("footnotes", []) if str(note).strip()]
     footer_height = (len(footnotes) * FOOTER_LINE_HEIGHT + 30) if footnotes else 20
     # Titles and footnotes are part of the figure too: widen the canvas rather than clip them.
-    text_widths = [_text_width(title, 24, bold=True), _text_width(subtitle, 15)] + [_text_width(n, 13) for n in footnotes]
+    text_widths = (
+        [_text_width(title, 24, bold=True), _text_width(subtitle, 15)]
+        + [_text_width(n, 13) for n in footnotes]
+        + [_text_width(str(row["note"]), 14) for row in row_layouts if row.get("note")]
+    )
     text_width = LEFT_MARGIN + max(text_widths) + RIGHT_MARGIN
     width = int(max(int(spec.get("width", 0) or 0), content_width, math.ceil(text_width)))
-    total_rows_height = sum(row["max_mol_height"] + row["caption_block"] for row in row_layouts)
+    total_rows_height = sum(
+        row["max_mol_height"] + row["caption_block"] + (24 if row.get("note") else 0) for row in row_layouts
+    )
     height = int(spec.get("height", 0) or 0) or (
         title_block + total_rows_height + ROW_GAP * (len(row_layouts) - 1) + footer_height
     )
@@ -535,6 +642,9 @@ def _compose_svg(
 
     y = title_block
     for row in row_layouts:
+        if row.get("note"):
+            parts.append(f'  <text x="{LEFT_MARGIN}" y="{y + 15}" class="subtitle">{_xml_escape(str(row["note"]))}</text>\n')
+            y += 24
         row_mid_y = y + row["max_mol_height"] / 2
         for item in row["items"]:
             if item["type"] == "molecule":

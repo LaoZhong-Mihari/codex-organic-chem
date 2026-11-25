@@ -15,6 +15,7 @@ described as publication-ready.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -146,30 +147,58 @@ def _label_collision_checks(elements: list[FigureElement]) -> list[str]:
 
 def svg_to_png(svg_path: Path, png_path: Path, *, scale: float = 1.0) -> list[str]:
     """Rasterize an SVG with whichever converter is installed."""
-    commands = [
-        ["rsvg-convert", "-z", str(scale), "-o", str(png_path), str(svg_path)],
-        ["magick", "-density", str(96 * scale), str(svg_path), str(png_path)],
-        ["convert", "-density", str(96 * scale), str(svg_path), str(png_path)],
-        ["inkscape", str(svg_path), "--export-type=png", f"--export-dpi={96 * scale}", f"--export-filename={png_path}"],
-    ]
+    from .utils import executable_path
+
+    import importlib
+
+    try:
+        resvg_py = importlib.import_module("resvg_py")
+        svg_text = svg_path.read_text(encoding="utf-8")
+        png_bytes = resvg_py.svg_to_bytes(svg_string=svg_text, zoom=max(1, int(round(scale))))
+        if png_bytes:
+            png_path.write_bytes(png_bytes)
+            if png_path.exists() and png_path.stat().st_size > 0:
+                return []
+    except Exception:
+        pass
+
+    try:
+        cairosvg = importlib.import_module("cairosvg")
+        cairosvg.svg2png(url=str(svg_path), write_to=str(png_path), scale=scale)
+        if png_path.exists() and png_path.stat().st_size > 0:
+            return []
+    except Exception:
+        pass
+
+    commands: list[list[str]] = []
+    for name, args in (
+        ("rsvg-convert", ["-z", str(scale), "-o", str(png_path), str(svg_path)]),
+        ("magick", ["-density", str(96 * scale), str(svg_path), str(png_path)]),
+        ("convert", ["-density", str(96 * scale), str(svg_path), str(png_path)]),
+        ("inkscape", [str(svg_path), "--export-type=png", f"--export-dpi={96 * scale}", f"--export-filename={png_path}"]),
+    ):
+        binary = executable_path(name) or name
+        commands.append([binary, *args])
     chrome = _chrome_path()
     if chrome:
         width, height = svg_dimensions(svg_path)
-        commands.append(
-            [
-                chrome,
-                "--headless",
-                "--disable-gpu",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--hide-scrollbars",
-                f"--force-device-scale-factor={scale}",
-                "--default-background-color=FFFFFFFF",
-                f"--window-size={width},{height}",
-                f"--screenshot={png_path}",
-                svg_path.as_uri(),
-            ]
-        )
+        win_w, win_h = max(width, 64), max(height, 64)
+        for headless_flag in ("--headless=new", "--headless"):
+            commands.append(
+                [
+                    chrome,
+                    headless_flag,
+                    "--disable-gpu",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--hide-scrollbars",
+                    f"--force-device-scale-factor={scale}",
+                    "--default-background-color=FFFFFFFF",
+                    f"--window-size={win_w},{win_h}",
+                    f"--screenshot={png_path}",
+                    svg_path.as_uri(),
+                ]
+            )
     for cmd in commands:
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=60)
@@ -186,6 +215,8 @@ def svg_to_png(svg_path: Path, png_path: Path, *, scale: float = 1.0) -> list[st
 
 
 def _chrome_path() -> str | None:
+    from .utils import executable_path
+
     candidates = [
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "/Applications/Chromium.app/Contents/MacOS/Chromium",
@@ -194,9 +225,12 @@ def _chrome_path() -> str | None:
         "chrome",
     ]
     for candidate in candidates:
-        if Path(candidate).exists():
-            return candidate
-        found = shutil.which(candidate)
+        try:
+            if Path(candidate).exists() and os.access(candidate, os.X_OK):
+                return candidate
+        except OSError:
+            pass
+        found = executable_path(candidate) or shutil.which(candidate)
         if found:
             return found
     return None
@@ -204,9 +238,14 @@ def _chrome_path() -> str | None:
 
 def svg_dimensions(svg_path: Path) -> tuple[int, int]:
     text = svg_path.read_text(encoding="utf-8", errors="ignore")
-    width = re.search(r"\bwidth=['\"](\d+)", text)
-    height = re.search(r"\bheight=['\"](\d+)", text)
-    return (int(width.group(1)) if width else 1200, int(height.group(1)) if height else 800)
+    svg_tag = re.search(r"<svg\b[^>]*>", text)
+    header = svg_tag.group(0) if svg_tag else text
+    width = re.search(r"\bwidth=['\"](\d+(?:\.\d+)?)", header)
+    height = re.search(r"\bheight=['\"](\d+(?:\.\d+)?)", header)
+    return (
+        int(round(float(width.group(1)))) if width else 1200,
+        int(round(float(height.group(1)))) if height else 800,
+    )
 
 
 def raster_ink_check(png_path: Path) -> tuple[list[str], dict[str, Any]]:

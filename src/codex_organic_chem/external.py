@@ -127,16 +127,6 @@ def tool_statuses() -> dict[str, dict]:
         "obabel": executable_status("obabel", ("-V",)).to_dict(),
         "xtb": executable_status("xtb", ("--version",)).to_dict(),
         "crest": executable_status("crest", ("--version",)).to_dict(),
-        "molscribe_command": {
-            "name": "molscribe_command",
-            "status": "available" if os.environ.get("CODEX_CHEM_MOLSCRIBE_CMD") else "unavailable",
-            "message": "Set CODEX_CHEM_MOLSCRIBE_CMD to enable a custom MolScribe adapter.",
-        },
-        "rxnscribe_command": {
-            "name": "rxnscribe_command",
-            "status": "available" if os.environ.get("CODEX_CHEM_RXNSCRIBE_CMD") else "unavailable",
-            "message": "Set CODEX_CHEM_RXNSCRIBE_CMD to enable a custom RxnScribe adapter.",
-        },
     }
     for spec in OCSR_ADAPTERS:
         key = f"{spec.name}_command"
@@ -193,10 +183,10 @@ def python_environment() -> dict:
 
     checks: dict[str, dict] = {
         "python": {
-            "status": "available" if sys.version_info[:2] == (3, 12) else "unsupported",
+            "status": "available" if sys.version_info >= (3, 12) else "unsupported",
             "version": platform.python_version(),
-            "required": ">=3.12,<3.13",
-            "fix": "uv sync --extra mcp   (uv picks or downloads Python 3.12)",
+            "required": ">=3.12",
+            "fix": "uv sync --extra mcp   (uv picks or downloads Python >=3.12)",
         },
     }
     for dist in ("rdkit", "numpy", "pillow"):

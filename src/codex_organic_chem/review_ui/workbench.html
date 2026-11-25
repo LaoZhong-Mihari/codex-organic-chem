@@ -166,27 +166,37 @@ kbd{font:11px ui-monospace,Menlo,monospace;border:1px solid #c5cad3;border-botto
 <div id="intro"></div>
 <main id="app"></main>
 
-<aside class="drawer" id="drawer">
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="dtitle">
   <div class="dh"><b id="dtitle"></b><span class="spacer" style="flex:1"></span><button id="dclose" class="small"></button></div>
   <div class="db" id="dbody"></div>
   <div class="df"><button id="dapply" class="primary"></button><button id="drevert"></button></div>
 </aside>
 
-<div class="modal" id="kmodal">
+<div class="modal" id="kmodal" role="dialog" aria-modal="true" aria-labelledby="ktitle">
   <div class="box">
     <div class="mh"><b id="ktitle"></b><span class="muted" id="kstate"></span><span style="flex:1"></span>
       <button id="kuse" class="primary"></button><button id="kclose"></button></div>
     <iframe id="kframe" title="Ketcher"></iframe>
   </div>
 </div>
-<div class="modal" id="imodal"><img id="iimg" alt=""></div>
-<div id="toast"></div>
+<div class="modal" id="imodal" role="dialog" aria-modal="true"><img id="iimg" alt=""></div>
+<div id="toast" role="status" aria-live="polite"></div>
 
 <script>
 'use strict';
 const P = new URLSearchParams(location.search);
 const SID = P.get('session') || P.get('session_id'), TOKEN = P.get('token');
-const API = (P.get('api') || location.origin).replace(/\/$/, '');
+const API = (() => {
+  const raw = P.get('api');
+  if (!raw) return location.origin.replace(/\/$/, '');
+  try {
+    const u = new URL(raw, location.origin);
+    if ((u.protocol === 'http:' || u.protocol === 'https:') && ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname.toLowerCase())) {
+      return u.origin;
+    }
+  } catch (_) {}
+  return location.origin.replace(/\/$/, '');
+})();
 const $ = (sel, root) => (root || document).querySelector(sel);
 const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -487,7 +497,7 @@ async function refreshThumb(index) {
 function renderQueue() {
   const host = $('#queue'); if (!host) return;
   host.innerHTML = S.session.items.map((item, i) => `
-    <div class="q ${i === S.current ? 'active' : ''}" data-i="${i}">
+    <div class="q ${i === S.current ? 'active' : ''}" data-i="${i}" tabindex="0" role="button">
       <div class="thumb" data-thumb="${i}"></div>
       <div class="qt"><div class="ql">${esc(item.label || item.id)}</div>
         <span class="pill ${itemStatus(item)}">${esc(t('st_' + itemStatus(item)))}</span></div>
@@ -498,7 +508,11 @@ function renderQueue() {
     const svg = await thumb(queueSmiles(item));
     const cell = $(`[data-thumb="${i}"]`, host); if (cell) cell.innerHTML = svg;
   });
-  $$('.q', host).forEach(q => q.addEventListener('click', () => { S.current = Number(q.dataset.i); renderStructures(); }));
+  $$('.q', host).forEach(q => {
+    const activate = () => { S.current = Number(q.dataset.i); renderStructures(); };
+    q.addEventListener('click', activate);
+    q.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); } });
+  });
   const sc = $('#scomment');
   if (sc) sc.addEventListener('change', () => {
     S.session.comment = sc.value;
@@ -613,7 +627,7 @@ function relPill(relation) {
 function cpdCard(id, svgOverride) {
   const r = S.session.route, c = id === '__target__' ? r.target : r.compounds[id];
   if (!c) return `<div class="cpd invalid" style="cursor:default"><div class="cap"><b>${esc(id)}</b></div></div>`;
-  return `<div class="cpd ${c.changed ? 'edited' : ''} ${c.status !== 'ok' ? 'invalid' : ''}" data-cid="${esc(id)}">
+  return `<div class="cpd ${c.changed ? 'edited' : ''} ${c.status !== 'ok' ? 'invalid' : ''}" data-cid="${esc(id)}" tabindex="0" role="button">
     ${pending() ? `<span class="pen">✎ ${esc(t('edit'))}</span>` : ''}
     ${svgOverride || c.svg || `<div style="padding:30px 8px;color:var(--bad)">${esc((c.warnings || []).join(' '))}</div>`}
     <div class="cap"><b>${esc(id === '__target__' ? t('target') : id)}</b> ${esc(id === '__target__' ? '' : c.name || '')}
@@ -656,8 +670,25 @@ function stepCard(s) {
     <div class="field"><input type="text" class="prose" data-comment value="${esc(s.comment || '')}" placeholder="${esc(t('step_comment_ph'))}" ${dis}></div>
   </section>`;
 }
+function captureRouteDrafts(root) {
+  const drafts = { steps: {}, rcomment: null };
+  $$('[data-step]', root).forEach(sec => {
+    const k = sec.dataset.step;
+    const cond = $('[data-cond]', sec), com = $('[data-comment]', sec);
+    drafts.steps[k] = { cond: cond ? cond.value : null, com: com ? com.value : null };
+  });
+  const rc = $('#rcomment', root);
+  if (rc) drafts.rcomment = rc.value;
+  return drafts;
+}
 function renderRoute() {
   const r = S.session.route, app = $('#app'), y = window.scrollY;
+  const prevDrafts = captureRouteDrafts(app);
+  r.steps.forEach(s => {
+    const d = prevDrafts.steps[s.key];
+    if (d && d.com != null && d.com !== '' && !s.comment) s.comment = d.com;
+  });
+  if (prevDrafts.rcomment != null && prevDrafts.rcomment !== '' && !S.session.comment) S.session.comment = prevDrafts.rcomment;
   const checked = r.steps.filter(s => s.decision).length;
   $('#ptext').textContent = t('progress_steps', checked, r.steps.length);
   $('#pbar').style.width = `${r.steps.length ? 100 * checked / r.steps.length : 0}%`;
@@ -691,7 +722,10 @@ function renderRoute() {
   $$('[data-cond]', app).forEach(fitHeight);
   $$('.summary [data-zoom]', app).forEach(img => img.addEventListener('click', () => { $('#iimg').src = img.src; $('#imodal').classList.add('open'); }));
   if (!pending()) return;
-  $$('.cpd[data-cid]', app).forEach(c => c.addEventListener('click', () => openDrawer(c.dataset.cid)));
+  $$('.cpd[data-cid]', app).forEach(c => {
+    c.addEventListener('click', () => openDrawer(c.dataset.cid));
+    c.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDrawer(c.dataset.cid); } });
+  });
   $$('[data-step]', app).forEach(sec => {
     const key = sec.dataset.step, step = r.steps.find(s => s.key === key);
     const send = body => call(SP('/route/step'), {key, ...body}).then(d => { S.session = d; renderRoute(); }).catch(e => toast(e.message));
@@ -755,7 +789,18 @@ $('#lang').addEventListener('click', () => {
   LANG = LANG === 'zh' ? 'en' : 'zh'; localStorage.setItem('codex-chem-review-lang', LANG);
   $('#app').innerHTML = ''; S.editors = {}; closeDrawer(); renderAll();
 });
-$('#finish').addEventListener('click', () => call(SP('/complete'), {comment: S.session.comment || ''}).then(d => { S.session = d; S.editors = {}; renderAll(); }).catch(e => toast(e.message)));
+$('#finish').addEventListener('click', async () => {
+  const sc = $('#scomment');
+  if (sc) S.session.comment = sc.value;
+  for (const item of S.session.items || []) {
+    const ed = itemStatus(item) === 'pending' ? S.editors[item.id] : null;
+    if (ed && ed.valid && ed.changed()) {
+      try { S.session = await call(SP('/items/' + encodeURIComponent(item.id)), {status: 'modified', reviewed_smiles: ed.smiles, comment: ed.comment || ''}); }
+      catch (e) { toast(e.message); return; }
+    }
+  }
+  call(SP('/complete'), {comment: S.session.comment || ''}).then(d => { S.session = d; S.editors = {}; renderAll(); }).catch(e => toast(e.message));
+});
 $('#bulk').addEventListener('click', confirmRemaining);
 $('#dclose').addEventListener('click', closeDrawer);
 $('#dapply').addEventListener('click', () => {
@@ -771,7 +816,12 @@ $('#kuse').addEventListener('click', useKetcher);
 $('#kclose').addEventListener('click', () => $('#kmodal').classList.remove('open'));
 $('#imodal').addEventListener('click', () => $('#imodal').classList.remove('open'));
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { $('#imodal').classList.remove('open'); if (!$('#kmodal').classList.contains('open')) closeDrawer(); return; }
+  if (e.key === 'Escape') {
+    $('#imodal').classList.remove('open');
+    if ($('#kmodal').classList.contains('open')) { $('#kmodal').classList.remove('open'); return; }
+    closeDrawer();
+    return;
+  }
   if (!S.session || S.session.kind === 'route' || !pending() || $('#kmodal').classList.contains('open')) return;
   if (/^(TEXTAREA|INPUT|SELECT)$/.test(document.activeElement.tagName) || e.metaKey || e.ctrlKey || e.altKey) return;
   const item = S.session.items[S.current], ed = item && S.editors[item.id];

@@ -3,6 +3,7 @@
 from .service import (
     chem_compare_structures,
     chem_compute,
+    chem_crop_image,
     chem_draw,
     chem_enumerate,
     chem_figure_tool_status,
@@ -11,6 +12,7 @@ from .service import (
     chem_mechanism_draft,
     chem_mechanism_render,
     chem_mechanism_spec_example,
+    chem_mechanism_steps_check,
     chem_mechanism_validate,
     chem_model_kit,
     chem_normalize_structure,
@@ -32,6 +34,7 @@ from .service import (
 __all__ = [
     "chem_compare_structures",
     "chem_compute",
+    "chem_crop_image",
     "chem_draw",
     "chem_enumerate",
     "chem_figure_tool_status",
@@ -40,6 +43,7 @@ __all__ = [
     "chem_mechanism_draft",
     "chem_mechanism_render",
     "chem_mechanism_spec_example",
+    "chem_mechanism_steps_check",
     "chem_mechanism_validate",
     "chem_model_kit",
     "chem_normalize_structure",

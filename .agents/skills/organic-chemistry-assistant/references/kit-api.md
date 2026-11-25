@@ -15,6 +15,8 @@ from codex_organic_chem import kit      # run with: uv run python
 | `substitution_products(s, "Cl", n_substitutions=1)` | `enumerate --task substitution --substituent Cl --n 1` | `chem_enumerate` | distinct mono/di-substitution products, with and without stereoisomers |
 | `symmetry_environments(s)` | `enumerate --task environments` | `chem_enumerate` | symmetry-distinct C and H (expected signal counts), enantiotopic and diastereotopic H |
 | `functional_groups(s)` | `enumerate --task groups` | `chem_enumerate` | functional groups, protecting groups, liabilities |
+| `mechanism_steps_check(steps, reactants, products, conditions)` | `mechanism-steps-check --steps ...` | `chem_mechanism_steps_check` | stepwise intermediate audit: valence, radical parity, proton-transfer skeleton, deltas, cascade/product closure |
+| `crop_image(path, boxes, grid=False)` | `crop-image path [--grid] [--boxes ...]` | `chem_crop_image` | coordinate ruler overlay and 2x upscaled sub-image crops from dense pages |
 | `route_check(route)` | `route-check --route f.json [--figure-dir d] [--issues-only]` | `chem_route_check` | step-by-step audit (below) |
 | `face(s, atom)` | `model-kit --task face --atoms i` | `chem_model_kit` | steric shielding of the Re/Si faces of a trigonal atom, per conformer, and the atoms responsible |
 | `cis_trans(s, a, b)` | `model-kit --task cis_trans --atoms a,b` | `chem_model_kit` | whether the substituents on two atoms of one ring are on the same face, over all conformers |

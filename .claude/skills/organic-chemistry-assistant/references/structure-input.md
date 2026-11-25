@@ -7,6 +7,11 @@ the usual cases.
 
 ## Reading a structure yourself
 
+0. **Crop dense pages first.** On a multi-structure exam sheet, reaction scheme,
+   or polycyclic cage table, call `chem_crop_image(image_path=..., grid=true)`
+   (`codex-chem crop-image page.jpg --grid --output-dir crops/`) to overlay a
+   coordinate ruler, then call `chem_crop_image(image_path=..., boxes=[{"id": "A", "box": [x1, y1, x2, y2]}], scale=2.5)`
+   and inspect each magnified crop before reading stereo wedges or ring junctions.
 1. Transcribe to SMILES with every wedge, hash and double-bond geometry.
 2. Re-read the image against your transcription, element by element: ring sizes,
    each substituent and its position, and at **every** stereocentre whether the

@@ -1,9 +1,9 @@
 [project]
 name = "codex-organic-chem"
 version = "1.1.0"
-description = "Local open-source organic chemistry toolchain for Codex: OCSR, structure normalization, drawing, lightweight computation, reaction analysis, and mechanism drafting."
+description = "Local open-source organic chemistry verification and figure toolchain for Codex and Claude Code: stereochemistry & isomer audits, route-check, stepwise mechanism checks, 3D model-kit, OCSR, and ACS/RSC scheme & curved-arrow rendering."
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "Codex Organic Chemistry Assistant" }]
 dependencies = [
@@ -30,6 +30,15 @@ packages = ["src/codex_organic_chem"]
 
 [tool.hatch.build.targets.wheel.shared-data]
 ".agents/skills/organic-chemistry-assistant" = ".agents/skills/organic-chemistry-assistant"
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "/outputs",
+  "/dist",
+  "/benchmarks",
+  "/.pytest_cache",
+  "/integrations/ketcher/node_modules",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

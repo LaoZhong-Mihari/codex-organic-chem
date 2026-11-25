@@ -4,6 +4,7 @@ import csv
 import importlib.util
 import json
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -18,21 +19,103 @@ else:  # pragma: no cover
 
 ABBREVIATION_SMILES = {
     "H": None,
-    "OH": "O",
-    "O": "O",
-    "OTs": "OS(=O)(=O)c1ccc(C)cc1",
-    "TsO": "OS(=O)(=O)c1ccc(C)cc1",
-    "SO2Tol": "S(=O)(=O)c1ccc(C)cc1",
-    "Ts": "S(=O)(=O)c1ccc(C)cc1",
-    "SePh": "[Se]c1ccccc1",
-    "MEM": "OCOCCOC",
-    "MEMO": "OCOCCOC",
-    "CHO": "C=O",
-    "COOEt": "C(=O)OCC",
-    "COOC2H5": "C(=O)OCC",
-    "Ph": "c1ccccc1",
-    "Me": "C",
-    "Et": "CC",
+    "OH": "*O",
+    "HO": "*O",
+    "O": "*O",
+    "SH": "*S",
+    "HS": "*S",
+    "NH2": "*N",
+    "H2N": "*N",
+    "NMe2": "*N(C)C",
+    "NEt2": "*N(CC)CC",
+    "OTs": "*OS(=O)(=O)c1ccc(C)cc1",
+    "TsO": "*OS(=O)(=O)c1ccc(C)cc1",
+    "SO2Tol": "*S(=O)(=O)c1ccc(C)cc1",
+    "Ts": "*S(=O)(=O)c1ccc(C)cc1",
+    "OMs": "*OS(=O)(=O)C",
+    "MsO": "*OS(=O)(=O)C",
+    "Ms": "*S(=O)(=O)C",
+    "OTf": "*OS(=O)(=O)C(F)(F)F",
+    "TfO": "*OS(=O)(=O)C(F)(F)F",
+    "Tf": "*S(=O)(=O)C(F)(F)F",
+    "NTf": "*NS(=O)(=O)C(F)(F)F",
+    "SePh": "*[Se]c1ccccc1",
+    "SPh": "*Sc1ccccc1",
+    "SOPh": "*S(=O)c1ccccc1",
+    "SO2Ph": "*S(=O)(=O)c1ccccc1",
+    "MEM": "*COCCOC",
+    "MEMO": "*OCOCCOC",
+    "OMEM": "*OCOCCOC",
+    "MOM": "*COC",
+    "MOMO": "*OCOC",
+    "OMOM": "*OCOC",
+    "THP": "*C1CCCCO1",
+    "OTHP": "*OC1CCCCO1",
+    "Bn": "*Cc1ccccc1",
+    "OBn": "*OCc1ccccc1",
+    "BnO": "*OCc1ccccc1",
+    "PMB": "*Cc1ccc(OC)cc1",
+    "OPMB": "*OCc1ccc(OC)cc1",
+    "PMBO": "*OCc1ccc(OC)cc1",
+    "Tr": "*C(c1ccccc1)(c1ccccc1)c1ccccc1",
+    "OTr": "*OC(c1ccccc1)(c1ccccc1)c1ccccc1",
+    "Ac": "*C(=O)C",
+    "OAc": "*OC(=O)C",
+    "AcO": "*OC(=O)C",
+    "NHAc": "*NC(=O)C",
+    "Bz": "*C(=O)c1ccccc1",
+    "OBz": "*OC(=O)c1ccccc1",
+    "BzO": "*OC(=O)c1ccccc1",
+    "Piv": "*C(=O)C(C)(C)C",
+    "OPiv": "*OC(=O)C(C)(C)C",
+    "PivO": "*OC(=O)C(C)(C)C",
+    "Boc": "*C(=O)OC(C)(C)C",
+    "NHBoc": "*NC(=O)OC(C)(C)C",
+    "BocNH": "*NC(=O)OC(C)(C)C",
+    "Cbz": "*C(=O)OCc1ccccc1",
+    "NHCbz": "*NC(=O)OCc1ccccc1",
+    "Fmoc": "*C(=O)OCC1c2ccccc2-c2ccccc12",
+    "NHFmoc": "*NC(=O)OCC1c2ccccc2-c2ccccc12",
+    "TMS": "*[Si](C)(C)C",
+    "OTMS": "*O[Si](C)(C)C",
+    "TMSO": "*O[Si](C)(C)C",
+    "TES": "*[Si](CC)(CC)CC",
+    "OTES": "*O[Si](CC)(CC)CC",
+    "TBS": "*[Si](C)(C)C(C)(C)C",
+    "TBDMS": "*[Si](C)(C)C(C)(C)C",
+    "OTBS": "*O[Si](C)(C)C(C)(C)C",
+    "TBSO": "*O[Si](C)(C)C(C)(C)C",
+    "OTBDMS": "*O[Si](C)(C)C(C)(C)C",
+    "TIPS": "*[Si](C(C)C)(C(C)C)C(C)C",
+    "OTIPS": "*O[Si](C(C)C)(C(C)C)C(C)C",
+    "TBDPS": "*[Si](c1ccccc1)(c1ccccc1)C(C)(C)C",
+    "OTBDPS": "*O[Si](c1ccccc1)(c1ccccc1)C(C)(C)C",
+    "CHO": "*C=O",
+    "CO2H": "*C(=O)O",
+    "COOH": "*C(=O)O",
+    "CO2Me": "*C(=O)OC",
+    "COOMe": "*C(=O)OC",
+    "COOEt": "*C(=O)OCC",
+    "CO2Et": "*C(=O)OCC",
+    "COOC2H5": "*C(=O)OCC",
+    "CO2tBu": "*C(=O)OC(C)(C)C",
+    "CN": "*C#N",
+    "NO2": "*[N+](=O)[O-]",
+    "CF3": "*C(F)(F)F",
+    "CCl3": "*C(Cl)(Cl)Cl",
+    "Bpin": "*B1OC(C)(C)C(C)(C)O1",
+    "Ph": "*c1ccccc1",
+    "Me": "*C",
+    "Et": "*CC",
+    "nPr": "*CCC",
+    "iPr": "*C(C)C",
+    "nBu": "*CCCC",
+    "iBu": "*CC(C)C",
+    "sBu": "*C(C)CC",
+    "tBu": "*C(C)(C)C",
+    "Cy": "*C1CCCCC1",
+    "Allyl": "*CC=C",
+    "Vinyl": "*C=C",
 }
 
 
@@ -118,6 +201,7 @@ def structure_metrics(smiles: str | None) -> dict[str, Any]:
         "aromatic_ring_count": aromatic_ring_count,
         "stereo_warning": any(label == "?" for _, label in chiral_centers),
         "canonical_smiles": Chem.MolToSmiles(mol, canonical=True, isomericSmiles=False),
+        "isomeric_smiles": Chem.MolToSmiles(mol, canonical=True, isomericSmiles=True),
         "main_fragment_smiles": _largest_fragment_smiles(smiles),
     }
 
@@ -129,6 +213,10 @@ def compare_smiles(candidate_smiles: str | None, gold_smiles: str | None) -> dic
         "exact_graph_match": bool(
             candidate_metrics["canonical_smiles"]
             and candidate_metrics["canonical_smiles"] == gold_metrics["canonical_smiles"]
+        ),
+        "exact_stereo_match": bool(
+            candidate_metrics.get("isomeric_smiles")
+            and candidate_metrics.get("isomeric_smiles") == gold_metrics.get("isomeric_smiles")
         ),
         "main_fragment_match": bool(
             candidate_metrics["main_fragment_smiles"]
@@ -336,12 +424,21 @@ def resolve_placeholders(smiles: str, definitions: dict[str, str]) -> dict[str, 
             warnings.append(f"Removed disconnected dummy {target_key or '*'} during placeholder resolution.")
             continue
         parent_idx = neighbors[0].GetIdx()
+        parent_atom = current.GetAtomWithIdx(parent_idx)
+        parent_tag = parent_atom.GetChiralTag()
+        old_nbrs = [n.GetIdx() for n in parent_atom.GetNeighbors()]
         bond = current.GetBondBetweenAtoms(parent_idx, idx)
         bond_type = bond.GetBondType() if bond is not None else Chem.BondType.SINGLE
         replacement_smiles = _definition_smiles(target_value)
         used_definitions[str(target_key)] = target_value
         if replacement_smiles is None:
-            rw.RemoveAtom(idx)
+            # Convert dummy to explicit H in place so tetrahedral bond-order parity is preserved, then RemoveHs later.
+            h_atom = rw.GetAtomWithIdx(idx)
+            h_atom.SetAtomicNum(1)
+            h_atom.SetIsotope(0)
+            h_atom.SetAtomMapNum(0)
+            if h_atom.HasProp("atomLabel"):
+                h_atom.ClearProp("atomLabel")
             continue
         fragment, attach_idx, frag_warnings = _fragment_with_attachment(replacement_smiles)
         warnings.extend(frag_warnings)
@@ -349,16 +446,29 @@ def resolve_placeholders(smiles: str, definitions: dict[str, str]) -> dict[str, 
             unresolved.append(target_key or _dummy_labels(target)[0])
             break
         rw.RemoveAtom(idx)
-        if idx < parent_idx:
-            parent_idx -= 1
+        shifted_parent_idx = parent_idx - 1 if idx < parent_idx else parent_idx
         base = rw.GetMol()
         offset = base.GetNumAtoms()
+        new_attach_idx = offset + attach_idx
         combo = Chem.CombineMols(base, fragment)
         rw = Chem.RWMol(combo)
-        rw.AddBond(parent_idx, offset + attach_idx, bond_type)
+        rw.AddBond(shifted_parent_idx, new_attach_idx, bond_type)
+        if parent_tag in (Chem.ChiralType.CHI_TETRAHEDRAL_CW, Chem.ChiralType.CHI_TETRAHEDRAL_CCW):
+            mapped_old = [
+                new_attach_idx if u == idx else (u - 1 if u > idx else u)
+                for u in old_nbrs
+            ]
+            new_nbrs = [n.GetIdx() for n in rw.GetAtomWithIdx(shifted_parent_idx).GetNeighbors()]
+            if len(new_nbrs) == len(mapped_old) and set(new_nbrs) == set(mapped_old):
+                from .structure_compare import _permutation_parity
+
+                rw.GetAtomWithIdx(shifted_parent_idx).SetChiralTag(parent_tag)
+                if _permutation_parity(new_nbrs, mapped_old) == 1:
+                    rw.GetAtomWithIdx(shifted_parent_idx).InvertChirality()
     resolved_mol = rw.GetMol()
     try:
         Chem.SanitizeMol(resolved_mol)
+        resolved_mol = Chem.RemoveHs(resolved_mol)
         resolved_smiles = Chem.MolToSmiles(resolved_mol, canonical=True, isomericSmiles=True)
     except Exception as exc:
         resolved_smiles = Chem.MolToSmiles(resolved_mol, canonical=True, isomericSmiles=True)
@@ -383,18 +493,30 @@ def resolve_placeholders(smiles: str, definitions: dict[str, str]) -> dict[str, 
     }
 
 
+def _safe_extract_py_literals(source: Path) -> dict[str, Any]:
+    import ast
+
+    tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+    extracted: dict[str, Any] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in {"A_TO_I", "A_TO_I_NUMBERS"}:
+                    extracted[target.id] = ast.literal_eval(node.value)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
+            if node.target.id in {"A_TO_I", "A_TO_I_NUMBERS"}:
+                extracted[node.target.id] = ast.literal_eval(node.value)
+    return extracted
+
+
 def load_gold_smiles(path: str | Path) -> list[dict[str, str]]:
     source = Path(path).expanduser().resolve()
     if source.suffix == ".py":
-        spec = importlib.util.spec_from_file_location("gold_smiles_module", source)
-        if spec is None or spec.loader is None:
-            raise ValueError(f"Could not import gold SMILES module: {source}")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        entries = getattr(module, "A_TO_I", None)
-        number_map = getattr(module, "A_TO_I_NUMBERS", {})
+        extracted = _safe_extract_py_literals(source)
+        entries = extracted.get("A_TO_I")
+        number_map = extracted.get("A_TO_I_NUMBERS", {})
         if entries is None:
-            raise ValueError(f"{source} does not define A_TO_I.")
+            raise ValueError(f"{source} does not define a literal A_TO_I list/tuple.")
         rows: list[dict[str, str]] = []
         for item in entries:
             if len(item) == 3:
@@ -585,65 +707,120 @@ def benchmark_to_tsv(payload: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _natural_sort_key(path: Path) -> list[int | str]:
+    parts = re.split(r"(\d+)", path.stem.lower())
+    return [int(part) if part.isdigit() else part for part in parts]
+
+
 def _infer_crop_identity(path: Path) -> tuple[str, str]:
-    match = re.match(r"(?P<label>[A-Za-z])_source_(?P<compound>\d+)", path.stem)
+    match = re.match(r"(?P<label>[A-Za-z]{1,2})_source_(?P<compound>\d+)", path.stem)
     if match:
         return match.group("label").upper(), match.group("compound")
-    match = re.match(r"(?P<label>[A-Za-z])[_-]", path.stem)
+    match = re.match(r"(?:crop|cmpd|compound|mol|item|opt)[_-]?(?P<compound>\d+)$", path.stem, re.IGNORECASE)
     if match:
-        return match.group("label").upper(), ""
-    return path.stem, ""
+        return path.stem, match.group("compound")
+    match = re.match(r"(?P<label>[A-Za-z])[_-](?P<compound>.*)$", path.stem)
+    if match:
+        return match.group("label").upper(), match.group("compound") if match.group("compound").isdigit() else ""
+    return path.stem, path.stem if path.stem.isdigit() else ""
 
 
-def parse_scheme(image: str | Path, crops: str | Path, gold_map: str | Path | None = None) -> dict[str, Any]:
+def parse_scheme(
+    image: str | Path,
+    crops: str | Path | list[dict[str, Any]],
+    gold_map: str | Path | None = None,
+) -> dict[str, Any]:
+    from .image_tools import crop_image
     from .ocsr import parse_image
 
-    image_path = Path(image).expanduser().resolve()
-    crop_dir = Path(crops).expanduser().resolve()
-    legend_definitions = load_legend_map(gold_map)
-    compounds: list[dict[str, Any]] = []
-    for crop in sorted(crop_dir.glob("*.png")):
-        label, compound = _infer_crop_identity(crop)
-        parsed = parse_image(str(crop), kind="molecule")
-        raw_candidates = parsed.get("candidates", [])
-        definitions = legend_definitions.get(compound, {}) or legend_definitions.get(label, {})
-        resolved_candidates = []
-        for candidate in raw_candidates:
-            smiles = _candidate_smiles(candidate)
-            if smiles and definitions:
-                resolved_candidates.append(resolve_placeholders(smiles, definitions))
-        top_smiles = None
-        if resolved_candidates:
-            top_smiles = resolved_candidates[0].get("smiles")
-        elif raw_candidates:
-            top_smiles = _candidate_smiles(raw_candidates[0])
-        compounds.append(
-            {
-                "label": label,
-                "compound": compound,
-                "crop": str(crop),
-                "raw_candidates": raw_candidates,
-                "legend_definitions": definitions,
-                "resolved_candidates": resolved_candidates,
-                "selected_smiles_for_consistency": top_smiles,
-                "warnings": parsed.get("warnings", []),
+    try:
+        image_path = Path(str(image)).expanduser().resolve()
+    except OSError as exc:
+        return {"status": "error", "warnings": [f"Invalid scheme image path: {exc}"], "compounds": []}
+
+    temp_crop_dir: tempfile.TemporaryDirectory[str] | None = None
+    crop_dir: Path | None = None
+    if isinstance(crops, list) or (isinstance(crops, str) and crops.lstrip().startswith(("[", "{"))):
+        temp_crop_dir = tempfile.TemporaryDirectory(prefix="codex-chem-scheme-crops-")
+        cropped = crop_image(image_path, boxes=crops, output_dir=temp_crop_dir.name, scale=2.0)
+        if cropped.get("status") != "ok":
+            temp_crop_dir.cleanup()
+            return {"status": "error", "image": str(image_path), "warnings": cropped.get("warnings", []), "compounds": []}
+        crop_dir = Path(temp_crop_dir.name)
+    else:
+        try:
+            crop_dir = Path(crops).expanduser().resolve()
+        except OSError as exc:
+            return {
+                "status": "error",
+                "image": str(image_path),
+                "warnings": [
+                    f"Invalid crops directory path ({exc}). Pass either a directory of crop images "
+                    "or a JSON list of {'id': 'A', 'box': [x1, y1, x2, y2]} crop specifications."
+                ],
+                "compounds": [],
             }
+        if not crop_dir.is_dir():
+            return {
+                "status": "error",
+                "image": str(image_path),
+                "warnings": [f"Crops directory does not exist: {crop_dir}"],
+                "compounds": [],
+            }
+
+    try:
+        legend_definitions = load_legend_map(gold_map)
+        compounds: list[dict[str, Any]] = []
+        allowed_exts = {".png", ".jpg", ".jpeg", ".webp"}
+        crop_files = sorted(
+            (p for p in crop_dir.iterdir() if p.is_file() and p.suffix.lower() in allowed_exts and p.stem != "grid_overlay"),
+            key=_natural_sort_key,
         )
-    consistency_input = [
-        {"label": item.get("label") or item.get("compound") or str(idx), "smiles": item.get("selected_smiles_for_consistency")}
-        for idx, item in enumerate(compounds, start=1)
-        if item.get("selected_smiles_for_consistency")
-    ]
-    return {
-        "status": "ok",
-        "image": str(image_path),
-        "crops": str(crop_dir),
-        "legend_definitions_source": str(Path(gold_map).expanduser().resolve()) if gold_map else "not_provided",
-        "legend_definitions": legend_definitions,
-        "compounds": compounds,
-        "route_consistency_warnings": route_consistency_warnings(consistency_input),
-        "tool_status": tool_statuses(),
-    }
+        for crop in crop_files:
+            label, compound = _infer_crop_identity(crop)
+            parsed = parse_image(str(crop), kind="molecule")
+            raw_candidates = parsed.get("candidates", [])
+            definitions = legend_definitions.get(compound, {}) or legend_definitions.get(label, {})
+            resolved_candidates = []
+            for candidate in raw_candidates:
+                smiles = _candidate_smiles(candidate)
+                if smiles and definitions:
+                    resolved_candidates.append(resolve_placeholders(smiles, definitions))
+            top_smiles = None
+            if resolved_candidates:
+                top_smiles = resolved_candidates[0].get("smiles")
+            elif raw_candidates:
+                top_smiles = _candidate_smiles(raw_candidates[0])
+            compounds.append(
+                {
+                    "label": label,
+                    "compound": compound,
+                    "crop": str(crop),
+                    "raw_candidates": raw_candidates,
+                    "legend_definitions": definitions,
+                    "resolved_candidates": resolved_candidates,
+                    "selected_smiles_for_consistency": top_smiles,
+                    "warnings": parsed.get("warnings", []),
+                }
+            )
+        consistency_input = [
+            {"label": item.get("label") or item.get("compound") or str(idx), "smiles": item.get("selected_smiles_for_consistency")}
+            for idx, item in enumerate(compounds, start=1)
+            if item.get("selected_smiles_for_consistency")
+        ]
+        return {
+            "status": "ok",
+            "image": str(image_path),
+            "crops": str(crop_dir) if temp_crop_dir is None else "inline_boxes",
+            "legend_definitions_source": str(Path(gold_map).expanduser().resolve()) if gold_map else "not_provided",
+            "legend_definitions": legend_definitions,
+            "compounds": compounds,
+            "route_consistency_warnings": route_consistency_warnings(consistency_input),
+            "tool_status": tool_statuses(),
+        }
+    finally:
+        if temp_crop_dir is not None:
+            temp_crop_dir.cleanup()
 
 
 def _benzene_relations(smiles: str | None) -> list[str]:

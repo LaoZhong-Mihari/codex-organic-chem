@@ -59,8 +59,14 @@ def check_cli(cli: str) -> None:
 
 
 def check_mcp() -> None:
+    import os
+
     server = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["codex-organic-chem"]
-    command = [shutil.which(server["command"]) or server["command"], *server.get("args", [])]
+    search_path = os.pathsep.join(
+        [os.environ.get("PATH", ""), "/opt/homebrew/bin", "/usr/local/bin", str(Path.home() / ".local" / "bin")]
+    )
+    resolved_cmd = shutil.which(server["command"]) or shutil.which(server["command"], path=search_path) or server["command"]
+    command = [resolved_cmd, *server.get("args", [])]
     proc = subprocess.Popen(command, cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, bufsize=1)
     lines: list[str] = []

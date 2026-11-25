@@ -23,7 +23,7 @@ a mechanistic hypothesis and explanation, but it is not treated as final
 manuscript artwork:
 
 ```bash
-codex-chem mechanism-draft \
+uv run codex-chem mechanism-draft \
   --reaction "CBr.[OH-]>>CO.[Br-]" \
   --quality publication
 ```
@@ -32,7 +32,7 @@ This returns `awaiting_user_confirmation` with a reaction preview. After the
 rendered reaction is confirmed:
 
 ```bash
-codex-chem mechanism-draft \
+uv run codex-chem mechanism-draft \
   --reaction "CBr.[OH-]>>CO.[Br-]" \
   --quality publication \
   --confirmed
@@ -41,9 +41,9 @@ codex-chem mechanism-draft \
 For accurate figure output, use an explicit atom-mapped mechanism canvas:
 
 ```bash
-codex-chem mechanism-render --example
-codex-chem mechanism-validate --spec mechanism.spec.json
-codex-chem mechanism-render --spec mechanism.spec.json --output-dir mechanism_out
+uv run codex-chem mechanism-render --example
+uv run codex-chem mechanism-validate --spec mechanism.spec.json
+uv run codex-chem mechanism-render --spec mechanism.spec.json --output-dir mechanism_out
 ```
 
 The spec must provide every intermediate and every curved arrow anchor using
@@ -65,16 +65,20 @@ for every elementary step. The validator checks mapped atom/isotope identity,
 hydrogen and charge conservation, electron-source capacity, simultaneous arrow
 replay and declared graph edits against the actual next state. `semantic_checks`
 reports `valid`, `invalid`, `incomplete` or `unsupported`; valid means supported
-electron bookkeeping, not kinetic or experimental proof. Currently supported
-replay covers localized main-group pair transfers and paired bond homolysis.
-General radical and aromatic/metal mechanisms require further analysis.
+electron bookkeeping, not kinetic or experimental proof. Supported replay covers
+localized main-group pair transfers, intermolecular π-bond attacks, active
+Kekulé aromatic rings (such as S<sub>E</sub>Ar), spectator aromatic substituents
+and counterions, and paired bond homolysis. General transition-metal catalytic
+cycles require further analysis.
 
 Transferred H atoms remain explicit and mapped. The trace resolves each side
 separately, computes changes from the structures and retains radical/stereo
 metadata. SVG embeds the same spec and trace, with a source-spec SHA-256, so AI
 can read the chemistry without guessing from pixels. This digest does not
-authenticate later manual edits to SVG paths. The canvas blocks stereo/E-Z and
-isotope depictions it cannot faithfully draw. Editor exports remain review
+authenticate later manual edits to SVG paths. By default the compact SVG canvas
+blocks stereo/E-Z and isotope depictions unless
+`layout.allow_stereo_and_isotopes=true` is set (in which case RDKit draws wedges
+and isotope labels on the compact SVG). Editor exports remain review
 adapters; native-editor round-trip fidelity is not established by these tests.
 
 See the [mechanism authoring contract](../.agents/skills/organic-chemistry-assistant/references/mechanism-spec.md).
@@ -154,8 +158,8 @@ Route and reaction-scheme figures are a first-class skill capability. Use
 figure format rather than a compact RDKit reaction preview.
 
 ```bash
-codex-chem route-figure --example
-codex-chem route-figure --spec route_figure.spec.json --output-dir route_out --format svg --format png
+uv run codex-chem route-figure --example
+uv run codex-chem route-figure --spec route_figure.spec.json --output-dir route_out --format svg --format png
 ```
 
 The route spec is JSON with a `rows` list. Each row contains ordered `items`:
@@ -174,8 +178,10 @@ one-off prompt reconstruction.
 `acs` (default, 30 px bonds), `rsc` (28 px) or `presentation` (36 px, coloured
 heteroatoms); `bond_length_px` overrides the bond length. In a molecule item,
 `label` is the bold caption line (usually the compound number) and `code` the
-grey line under it; captions wrap at the wider of their structure and 220 px,
-and the cell grows to fit them, so a long name cannot run off the canvas.
+grey line under it; captions (including CJK text) wrap at the wider of their
+structure and 220 px, and the cell grows to fit them, so a long name cannot run
+off the canvas. Each row also accepts an optional `"note"` header string to
+label convergent branches.
 
 Three options make a scheme read like one drawn by hand:
 
@@ -192,8 +198,9 @@ Three options make a scheme read like one drawn by hand:
   the input's stereo tags for the final coordinates.
 - `subscript_formulas` (default `true`): in arrow text, digits right after a
   letter or a closing bracket become subscripts (`CH2Cl2`, `Pd(PPh3)4`), while
-  amounts, temperatures and locants (`0 °C`, `1 atm`, `2,2-dimethoxypropane`)
-  and labels such as `SN2`, `E1cb` or `L1` stay as written.
+  amounts, temperatures and locants (`0 °C`, `1 atm`, `2,2-dimethoxypropane`),
+  precatalyst generation tags (`XPhos-Pd-G3`, `RuPhos-Pd-G4`) and labels such as
+  `SN2`, `E1cb` or `L1` stay as written.
 - `max_width` (pixels, default off): a row wider than this is split before
   arrows into the fewest rows that fit, choosing the split with the most even
   row widths. Each continuation row starts with its arrow; a stretch between

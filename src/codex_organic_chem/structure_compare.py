@@ -13,6 +13,7 @@ label can change when a substituent changes although nothing moved in space.
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from typing import Any, Iterable
 
@@ -43,24 +44,158 @@ MAX_STEREOISOMERS = 1024
 # parsing helpers
 
 
+_SMILES_ATOM_RE = re.compile(r"(\[[^\]]+\]|Br|Cl|[BCNOPSFIbcnops*])")
+
+
+def _extract_raw_allene_tags(smiles: str) -> dict[int, str]:
+    """Return ``{raw_atom_idx: 'CCW'|'CW'}`` for bracketed ``@...`` tokens in SMILES order."""
+    core = smiles.strip().split()[0]
+    tags: dict[int, str] = {}
+    for idx, match in enumerate(_SMILES_ATOM_RE.finditer(core)):
+        token = match.group(1)
+        if not token.startswith("["):
+            continue
+        if "@@" in token:
+            tags[idx] = "CW"
+        elif "@" in token:
+            tags[idx] = "CCW"
+    return tags
+
+
+def _end_cip_order(base_mol: Any, end_idx: int, allene_center_idx: int) -> tuple[list[tuple[str, int]], bool]:
+    """Order the two non-allene substituents on ``end_idx`` by IUPAC 2013 CIP priority.
+
+    Each substituent is represented as ``('atom', neighbor_idx)`` or ``('H', end_idx)``
+    in SMILES appearance order. Returns ``([first_in_smiles, second_in_smiles], high_is_first)``
+    when the two substituents are CIP-distinct, or ``([], False)`` when identical.
+    """
+    end_atom = base_mol.GetAtomWithIdx(end_idx)
+    real_nbs = [n.GetIdx() for n in end_atom.GetNeighbors() if n.GetIdx() != allene_center_idx]
+    n_h = end_atom.GetTotalNumHs()
+    if len(real_nbs) + n_h != 2 or n_h == 2:
+        return [], False
+    if len(real_nbs) == 2:
+        slots = [("atom", min(real_nbs)), ("atom", max(real_nbs))]
+    else:
+        nb = real_nbs[0]
+        # In OpenSMILES, an implicit/bracket H stands at end_idx's own position in SMILES order.
+        slots = [("atom", nb), ("H", end_idx)] if nb < end_idx else [("H", end_idx), ("atom", nb)]
+
+    # Build a topological tetrahedral probe at end_idx to compare slots[0] vs slots[1].
+    rw = Chem.RWMol(base_mol)
+    rw.RemoveAllConformers()
+    if rw.GetBondBetweenAtoms(end_idx, allene_center_idx) is not None:
+        rw.RemoveBond(end_idx, allene_center_idx)
+    rw.GetAtomWithIdx(allene_center_idx).SetNoImplicit(True)
+    e_atom = rw.GetAtomWithIdx(end_idx)
+    e_atom.SetAtomicNum(6)
+    e_atom.SetFormalCharge(0)
+    e_atom.SetNoImplicit(True)
+    e_atom.SetNumExplicitHs(0)
+
+    slot_indices: list[int] = []
+    for kind, ref_idx in slots:
+        if kind == "atom":
+            slot_indices.append(ref_idx)
+        else:
+            h_atom = Chem.Atom(1)
+            h_idx = rw.AddAtom(h_atom)
+            rw.AddBond(end_idx, h_idx, Chem.BondType.SINGLE)
+            slot_indices.append(h_idx)
+
+    hi = Chem.Atom(118)
+    hi.SetNoImplicit(True)
+    lo = Chem.Atom(0)
+    lo.SetNoImplicit(True)
+    hi_idx = rw.AddAtom(hi)
+    lo_idx = rw.AddAtom(lo)
+    rw.AddBond(end_idx, hi_idx, Chem.BondType.SINGLE)
+    rw.AddBond(end_idx, lo_idx, Chem.BondType.SINGLE)
+    rw.GetAtomWithIdx(end_idx).SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
+    probe = rw.GetMol()
+    try:
+        Chem.SanitizeMol(probe)
+        rdCIPLabeler.AssignCIPLabels(probe)
+    except Exception:
+        return [], False
+    p_end = probe.GetAtomWithIdx(end_idx)
+    if not p_end.HasProp("_CIPCode"):
+        return [], False
+    cip = p_end.GetProp("_CIPCode")
+    bond_nbs = [b.GetOtherAtomIdx(end_idx) for b in p_end.GetBonds()]
+    parity = _permutation_parity(bond_nbs, [lo_idx, hi_idx, slot_indices[0], slot_indices[1]])
+    first_wins = cip in {"S", "s"}
+    if parity == 1:
+        first_wins = not first_wins
+    return slots, first_wins
+
+
+def _stereogenic_allenes(mol: Any) -> list[tuple[int, int, int, bool, bool]]:
+    """Return ``(center_idx, left_idx, right_idx, left_first_wins, right_first_wins)`` for chiral allenes."""
+    ring_info = mol.GetRingInfo()
+    small_ring_atoms = {idx for ring in ring_info.AtomRings() if len(ring) < 8 for idx in ring}
+    found: list[tuple[int, int, int, bool, bool]] = []
+    for atom in mol.GetAtoms():
+        c_idx = atom.GetIdx()
+        if atom.GetAtomicNum() != 6 or atom.GetDegree() != 2 or c_idx in small_ring_atoms:
+            continue
+        bonds = list(atom.GetBonds())
+        if not all(b.GetBondType() == Chem.BondType.DOUBLE for b in bonds):
+            continue
+        ends = sorted(b.GetOtherAtomIdx(c_idx) for b in bonds)
+        left_idx, right_idx = ends[0], ends[1]
+        if mol.GetAtomWithIdx(left_idx).GetAtomicNum() != 6 or mol.GetAtomWithIdx(right_idx).GetAtomicNum() != 6:
+            continue
+        left_slots, left_first = _end_cip_order(mol, left_idx, c_idx)
+        if not left_slots:
+            continue
+        right_slots, right_first = _end_cip_order(mol, right_idx, c_idx)
+        if not right_slots:
+            continue
+        found.append((c_idx, left_idx, right_idx, left_first, right_first))
+    return found
+
+
 def parse(smiles: str, *, keep_maps: bool = False) -> Any:
-    """Parse SMILES into a sanitized mol with explicit H removed.
+    """Parse SMILES into a sanitized mol with explicit non-isotopic H removed.
 
     Atom-map numbers are stripped unless ``keep_maps`` is set, because they
-    change canonical SMILES and therefore identity comparisons.
+    change canonical SMILES and therefore identity comparisons. OpenSMILES
+    axial allene tags (``=[C@]=`` / ``=[C@@]=``) are preserved as ``Ra``/``Sa``
+    on stereogenic cumulated centres that RDKit's SMILES parser otherwise drops.
     """
     if not RDKIT_AVAILABLE:
         raise StructureError("RDKit is not available.")
     if not isinstance(smiles, str) or not smiles.strip():
         raise StructureError("Empty SMILES.")
-    mol = Chem.MolFromSmiles(smiles.strip())
+    clean_smiles = smiles.strip()
+    raw_allene = _extract_raw_allene_tags(clean_smiles) if "@" in clean_smiles else {}
+    mol = Chem.MolFromSmiles(clean_smiles)
     if mol is None:
         raise StructureError(f"RDKit cannot parse SMILES: {smiles!r}")
+    for raw_idx, tag in raw_allene.items():
+        if raw_idx < mol.GetNumAtoms():
+            atom = mol.GetAtomWithIdx(raw_idx)
+            if atom.GetChiralTag() == Chem.ChiralType.CHI_UNSPECIFIED and _cumulated(atom):
+                atom.SetProp("_RawAlleneTag", tag)
     mol = Chem.RemoveHs(mol)
     if not keep_maps:
         for atom in mol.GetAtoms():
             atom.SetAtomMapNum(0)
     Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
+    if any(a.HasProp("_RawAlleneTag") for a in mol.GetAtoms()):
+        for c_idx, _l, _r, left_first, right_first in _stereogenic_allenes(mol):
+            c_atom = mol.GetAtomWithIdx(c_idx)
+            if not c_atom.HasProp("_RawAlleneTag"):
+                continue
+            tag = c_atom.GetProp("_RawAlleneTag")
+            swaps = (0 if left_first else 1) + (0 if right_first else 1)
+            # In OpenSMILES extended tetrahedral order [q0, q1, q2, q3], '@' with 1 swap (e.g. CC=[C@]=CC) is Ra.
+            is_ra = (tag == "CCW" and swaps % 2 == 1) or (tag == "CW" and swaps % 2 == 0)
+            c_atom.SetProp("_CodexAlleneCIP", "Ra" if is_ra else "Sa")
+        for atom in mol.GetAtoms():
+            if atom.HasProp("_RawAlleneTag"):
+                atom.ClearProp("_RawAlleneTag")
     return mol
 
 
@@ -93,12 +228,46 @@ def delta_text(delta: Counter | dict[str, int]) -> str:
     return " ".join(f"{v:+d}{k}" for k, v in items)
 
 
+def isotope_counter(mol: Any) -> Counter[str]:
+    counter: Counter[str] = Counter()
+    for atom in mol.GetAtoms():
+        iso = atom.GetIsotope()
+        if iso > 0:
+            counter[f"[{iso}{atom.GetSymbol()}]"] += 1
+    return +counter
+
+
+def _constitution_smiles(mol: Any, *, keep_isotopes: bool = False) -> str:
+    copy_mol = Chem.Mol(mol)
+    for atom in copy_mol.GetAtoms():
+        atom.SetAtomMapNum(0)
+        if not keep_isotopes:
+            atom.SetIsotope(0)
+    Chem.RemoveStereochemistry(copy_mol)
+    if not keep_isotopes:
+        copy_mol = Chem.RemoveHs(copy_mol)
+        return Chem.MolToSmiles(copy_mol, canonical=True, isomericSmiles=False)
+    return Chem.MolToSmiles(copy_mol, canonical=True, isomericSmiles=True)
+
+
 def canonical(mol: Any, *, stereo: bool = True) -> str:
-    return Chem.MolToSmiles(mol, canonical=True, isomericSmiles=stereo)
+    base = Chem.MolToSmiles(mol, canonical=True, isomericSmiles=stereo)
+    if not stereo:
+        return base
+    allene_tags = [
+        (atom.GetIdx(), atom.GetProp("_CodexAlleneCIP"))
+        for atom in mol.GetAtoms()
+        if atom.HasProp("_CodexAlleneCIP")
+    ]
+    if not allene_tags:
+        return base
+    ranks = list(Chem.CanonicalRankAtoms(mol, breakTies=False, includeChirality=True))
+    suffix = ",".join(f"{ranks[idx]}:{cip}" for idx, cip in sorted(allene_tags, key=lambda item: ranks[item[0]]))
+    return f"{base}|axial:{suffix}|"
 
 
 def mirror(mol: Any) -> Any:
-    """Mirror image: invert every tetrahedral centre; E/Z is unchanged."""
+    """Mirror image: invert every tetrahedral and axial stereocentre; acyclic E/Z is unchanged."""
     copy = Chem.Mol(mol)
     for atom in copy.GetAtoms():
         if atom.GetChiralTag() in (
@@ -106,6 +275,9 @@ def mirror(mol: Any) -> Any:
             Chem.ChiralType.CHI_TETRAHEDRAL_CCW,
         ):
             atom.InvertChirality()
+        if atom.HasProp("_CodexAlleneCIP"):
+            cur = atom.GetProp("_CodexAlleneCIP")
+            atom.SetProp("_CodexAlleneCIP", "Sa" if cur == "Ra" else "Ra")
     Chem.AssignStereochemistry(copy, cleanIt=True, force=True)
     return copy
 
@@ -185,7 +357,47 @@ def stereo_elements(mol: Any) -> list[dict[str, Any]]:
                     "in_ring": bond.IsInRing(),
                 }
             )
+        elif hasattr(Chem.StereoType, "Bond_Atropisomer") and info.type == Chem.StereoType.Bond_Atropisomer:
+            bond = mol.GetBondWithIdx(info.centeredOn)
+            elements.append(
+                {
+                    "kind": "atropisomer",
+                    "atom_indices": [bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()],
+                    "specified": specified,
+                    "cip": bond.GetProp("_CIPCode") if specified and bond.HasProp("_CIPCode") else None,
+                    "in_ring": bond.IsInRing(),
+                }
+            )
+    for c_idx, left_idx, right_idx, _lf, _rf in _stereogenic_allenes(mol):
+        c_atom = mol.GetAtomWithIdx(c_idx)
+        spec_allene = c_atom.HasProp("_CodexAlleneCIP")
+        elements.append(
+            {
+                "kind": "axial_allene",
+                "atom_index": c_idx,
+                "atom_indices": [left_idx, c_idx, right_idx],
+                "element": c_atom.GetSymbol(),
+                "specified": spec_allene,
+                "cip": c_atom.GetProp("_CodexAlleneCIP") if spec_allene else None,
+                "in_ring": c_atom.IsInRing(),
+            }
+        )
     return elements
+
+
+def _expand_allene_isomers(mols: list[Any], allene_indices: list[int]) -> list[Any]:
+    if not allene_indices:
+        return mols
+    current = list(mols)
+    for c_idx in allene_indices:
+        nxt: list[Any] = []
+        for m in current:
+            for cip in ("Ra", "Sa"):
+                copy_m = Chem.Mol(m)
+                copy_m.GetAtomWithIdx(c_idx).SetProp("_CodexAlleneCIP", cip)
+                nxt.append(copy_m)
+        current = nxt
+    return current
 
 
 def consistent_stereoisomers(mol: Any, *, max_elements: int = 8) -> list[Any] | None:
@@ -202,23 +414,34 @@ def consistent_stereoisomers(mol: Any, *, max_elements: int = 8) -> list[Any] | 
         for info in potential_stereo(mol)
         if info.specified != Chem.StereoSpecified.Specified
     ]
-    if not open_elements:
+    open_allenes = [
+        c_idx
+        for c_idx, _l, _r, _lf, _rf in _stereogenic_allenes(mol)
+        if not mol.GetAtomWithIdx(c_idx).HasProp("_CodexAlleneCIP")
+    ]
+    total_open = len(open_elements) + len(open_allenes)
+    if total_open == 0:
         return [mol]
-    if len(open_elements) > max_elements:
+    if total_open > max_elements:
         return None
-    in_ring = any(
-        mol.GetAtomWithIdx(info.centeredOn).IsInRing()
-        for info in open_elements
-        if info.type == Chem.StereoType.Atom_Tetrahedral
-    )
-    options = StereoEnumerationOptions(
-        unique=True,
-        onlyUnassigned=True,
-        maxIsomers=MAX_STEREOISOMERS,
-        tryEmbedding=in_ring and len(open_elements) <= 6,
-    )
+    if not open_elements:
+        base_isomers = [Chem.Mol(mol)]
+    else:
+        in_ring = any(
+            mol.GetAtomWithIdx(info.centeredOn).IsInRing()
+            for info in open_elements
+            if info.type == Chem.StereoType.Atom_Tetrahedral
+        )
+        options = StereoEnumerationOptions(
+            unique=True,
+            onlyUnassigned=True,
+            maxIsomers=MAX_STEREOISOMERS,
+            tryEmbedding=in_ring and len(open_elements) <= 6,
+        )
+        base_isomers = list(EnumerateStereoisomers(mol, options=options)) or [Chem.Mol(mol)]
+    expanded = _expand_allene_isomers(base_isomers, open_allenes)
     unique: dict[str, Any] = {}
-    for iso in EnumerateStereoisomers(mol, options=options):
+    for iso in expanded:
         Chem.AssignStereochemistry(iso, cleanIt=True, force=True)
         unique.setdefault(canonical(iso), iso)
     return list(unique.values()) or [mol]
@@ -263,7 +486,7 @@ def stereo_audit(smiles: str, *, enumerate_isomers: bool = True) -> dict[str, An
         # it is a symmetry artefact of perception, not an open stereocentre.
         elements = [e for e in elements if e["specified"]]
     unspecified = [e for e in elements if not e["specified"]]
-    centres = [e for e in elements if e["kind"] == "tetrahedral"]
+    centres = [e for e in elements if e["kind"] in {"tetrahedral", "axial_allene", "atropisomer"}]
     bonds = [e for e in elements if e["kind"] == "double_bond"]
     result: dict[str, Any] = {
         "status": "ok",
@@ -300,8 +523,12 @@ def stereo_audit(smiles: str, *, enumerate_isomers: bool = True) -> dict[str, An
 
 def _stereoisomer_summary(mol: Any, *, limit: int = 32) -> dict[str, Any]:
     base = Chem.Mol(mol)
+    for atom in base.GetAtoms():
+        if atom.HasProp("_CodexAlleneCIP"):
+            atom.ClearProp("_CodexAlleneCIP")
     Chem.RemoveStereochemistry(base)
-    n_elements = len(list(Chem.FindPotentialStereo(base)))
+    allene_indices = [c_idx for c_idx, _l, _r, _lf, _rf in _stereogenic_allenes(base)]
+    n_elements = len(list(potential_stereo(base))) + len(allene_indices)
     if n_elements > 10:
         return {
             "status": "skipped",
@@ -309,7 +536,7 @@ def _stereoisomer_summary(mol: Any, *, limit: int = 32) -> dict[str, Any]:
         }
     has_ring_stereo = any(
         mol.GetAtomWithIdx(i.centeredOn).IsInRing()
-        for i in Chem.FindPotentialStereo(base)
+        for i in potential_stereo(base)
         if i.type == Chem.StereoType.Atom_Tetrahedral
     )
     # Ring-fused/bridged systems admit graph stereoisomers that cannot exist in
@@ -318,7 +545,8 @@ def _stereoisomer_summary(mol: Any, *, limit: int = 32) -> dict[str, Any]:
     options = StereoEnumerationOptions(
         unique=True, onlyUnassigned=False, maxIsomers=MAX_STEREOISOMERS, tryEmbedding=try_embedding
     )
-    isomers = list(EnumerateStereoisomers(base, options=options))
+    isomers = list(EnumerateStereoisomers(base, options=options)) or [base]
+    isomers = _expand_allene_isomers(isomers, allene_indices)
     smiles_set = {}
     for iso in isomers:
         Chem.AssignStereochemistry(iso, cleanIt=True, force=True)
@@ -519,6 +747,7 @@ def configuration_differences(mol_a: Any, mol_b: Any) -> dict[str, Any] | None:
     centres = [
         e["atom_index"] for e in stereo_elements(mol_a) if e["kind"] == "tetrahedral"
     ]
+    allenes = [e["atom_index"] for e in stereo_elements(mol_a) if e["kind"] == "axial_allene"]
     bonds = [
         mol_a.GetBondBetweenAtoms(*e["atom_indices"]).GetIdx()
         for e in stereo_elements(mol_a)
@@ -546,6 +775,23 @@ def configuration_differences(mol_a: Any, mol_b: Any) -> dict[str, Any] | None:
                 open_items.append({**entry, "state": relation})
             elif relation == "ambiguous":
                 open_items.append({**entry, "state": relation})
+        for idx in allenes:
+            atom_a = mol_a.GetAtomWithIdx(idx)
+            atom_b = mol_b.GetAtomWithIdx(mapping[idx])
+            cip_a = atom_a.GetProp("_CodexAlleneCIP") if atom_a.HasProp("_CodexAlleneCIP") else None
+            cip_b = atom_b.GetProp("_CodexAlleneCIP") if atom_b.HasProp("_CodexAlleneCIP") else None
+            entry = {
+                "kind": "axial_allene",
+                "atom_index_a": idx,
+                "atom_index_b": mapping[idx],
+                "element": atom_a.GetSymbol(),
+                "cip_a": cip_a,
+                "cip_b": cip_b,
+            }
+            if cip_a and cip_b and cip_a != cip_b:
+                differing.append(entry)
+            elif bool(cip_a) != bool(cip_b):
+                open_items.append({**entry, "state": "unspecified_a" if not cip_a else "unspecified_b"})
         for bond_idx in bonds:
             bond_a = mol_a.GetBondWithIdx(bond_idx)
             relation = double_bond_relation(bond_a, mol_b, mapping)
@@ -594,19 +840,48 @@ def compare_structures(smiles_a: str, smiles_b: str) -> dict[str, Any]:
         if charge_a != charge_b:
             result["charge_delta_b_minus_a"] = charge_b - charge_a
         return result
-    if canonical(mol_a, stereo=False) != canonical(mol_b, stereo=False):
+    iso_a, iso_b = isotope_counter(mol_a), isotope_counter(mol_b)
+    const_a = _constitution_smiles(mol_a, keep_isotopes=False)
+    const_b = _constitution_smiles(mol_b, keep_isotopes=False)
+    if iso_a != iso_b:
+        iso_delta = Counter(iso_b)
+        iso_delta.subtract(iso_a)
+        result["isotope_delta_b_minus_a"] = delta_text({k: v for k, v in iso_delta.items() if v})
+        if const_a == const_b:
+            result["relation"] = "isotopologues"
+            result["note"] = "Same connectivity and element counts, but different isotopic composition."
+        else:
+            result["relation"] = "different_formula"
+        return result
+    if const_a != const_b:
         relation = "constitutional_isomers"
         try:
             from rdkit.Chem.MolStandardize import rdMolStandardize
 
             enumerator = rdMolStandardize.TautomerEnumerator()
-            if canonical(enumerator.Canonicalize(mol_a), stereo=False) == canonical(
-                enumerator.Canonicalize(mol_b), stereo=False
-            ):
-                relation = "tautomers"
+            ta = enumerator.Canonicalize(mol_a)
+            tb = enumerator.Canonicalize(mol_b)
+            if _constitution_smiles(ta, keep_isotopes=False) == _constitution_smiles(tb, keep_isotopes=False):
+                Chem.AssignStereochemistry(ta, cleanIt=True, force=True)
+                Chem.AssignStereochemistry(tb, cleanIt=True, force=True)
+                open_ta = [e for e in stereo_elements(ta) if e["kind"] == "tetrahedral" and not e["specified"]]
+                open_tb = [e for e in stereo_elements(tb) if e["kind"] == "tetrahedral" and not e["specified"]]
+                if canonical(ta) != canonical(tb) and not open_ta and not open_tb:
+                    relation = "tautomers_different_stereo"
+                    result["tautomer_stereo_mismatch"] = True
+                    result["warnings"].append(
+                        "Structures share a canonical tautomer skeleton, but at least one non-tautomerizing "
+                        "stereocentre has opposite configuration."
+                    )
+                else:
+                    relation = "tautomers"
         except Exception:  # pragma: no cover - standardizer unavailable
             pass
         result["relation"] = relation
+        return result
+    if iso_a and _constitution_smiles(mol_a, keep_isotopes=True) != _constitution_smiles(mol_b, keep_isotopes=True):
+        result["relation"] = "isotopomers"
+        result["note"] = "Same connectivity and isotopic formula, but isotopic labels sit on different positions."
         return result
     if canonical(mol_a) == canonical(mol_b):
         result["relation"] = "identical"
@@ -675,21 +950,47 @@ def _substituted_smiles(with_h: Any, h_idx: int, atomic_num: int, isotope: int =
     return canonical(product)
 
 
+def _heavy_isotopic_key(with_h: Any, heavy_idx: int) -> str:
+    rw = Chem.RWMol(with_h)
+    rw.GetAtomWithIdx(heavy_idx).SetIsotope(999)
+    product = rw.GetMol()
+    Chem.SanitizeMol(product)
+    if product.GetNumConformers():
+        Chem.AssignStereochemistryFrom3D(product)
+    product = Chem.RemoveHs(product)
+    return canonical(product)
+
+
 def symmetry_environments(smiles: str) -> dict[str, Any]:
     """Symmetry-distinct atoms: expected 13C and 1H signal counts.
 
-    Hydrogens are classified by the substitution test (replace each H by a
-    label and compare products): identical products -> homotopic, mirror-image
-    products -> enantiotopic (one signal in an achiral medium), otherwise
-    diastereotopic/constitutionally distinct (separate signals in principle).
-    Fast conformational averaging is implied because the test is graph-based.
-    Accidental overlap and slow exchange are not modelled.
+    Both heavy atoms and hydrogens are classified by the 3D isotopic/label
+    substitution test: replace each atom with a marker, perceive 3D
+    stereochemistry (capturing diastereotopic methyls/methylenes near chiral
+    centres that 2D topological ranks merge), and group mirror-image products
+    together so enantiotopic atoms count once in an achiral medium.
     """
     mol = parse(smiles)
     ranks = list(Chem.CanonicalRankAtoms(mol, breakTies=False, includeChirality=True))
-    heavy_classes: dict[str, dict[int, list[int]]] = {}
+    heavy_classes: dict[str, dict[Any, list[int]]] = {}
     for atom in mol.GetAtoms():
         heavy_classes.setdefault(atom.GetSymbol(), {}).setdefault(ranks[atom.GetIdx()], []).append(atom.GetIdx())
+    with_h = _embedded_with_hs(mol)
+    if with_h is not None:
+        heavy_3d: dict[str, dict[str, list[int]]] = {}
+        for atom in mol.GetAtoms():
+            idx = atom.GetIdx()
+            symbol = atom.GetSymbol()
+            try:
+                key = _heavy_isotopic_key(with_h, idx)
+                partner_mol = Chem.MolFromSmiles(key.split("|")[0])
+                partner = canonical(mirror(partner_mol)) if partner_mol is not None else key
+                group_key = min(key, partner)
+            except Exception:
+                group_key = f"rank-{ranks[idx]}"
+            heavy_3d.setdefault(symbol, {}).setdefault(group_key, []).append(idx)
+        heavy_classes = heavy_3d
+
     result: dict[str, Any] = {
         "status": "ok",
         "input_smiles": smiles,
@@ -701,7 +1002,6 @@ def symmetry_environments(smiles: str) -> dict[str, Any]:
         "n_carbon_environments": len(heavy_classes.get("C", {})),
         "warnings": [],
     }
-    with_h = _embedded_with_hs(mol)
     if with_h is None:
         result["warnings"].append("3D embedding failed; hydrogen environments were not classified.")
         return result

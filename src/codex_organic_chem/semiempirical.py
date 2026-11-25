@@ -61,14 +61,22 @@ def _embed_geometry(smiles: str) -> tuple[Any, str, int, int, list[str]]:
     params = AllChem.ETKDGv3()
     params.randomSeed = 48879
     if AllChem.EmbedMolecule(mol, params) < 0:
-        raise GeometryError("RDKit failed to generate a 3D conformer.")
+        params.useRandomCoords = True
+        if AllChem.EmbedMolecule(mol, params) < 0:
+            raise GeometryError("RDKit failed to generate a 3D conformer.")
+    ff_ok = False
     try:
-        AllChem.MMFFOptimizeMolecule(mol)
+        if AllChem.MMFFHasAllMoleculeParams(mol):
+            ff_ok = AllChem.MMFFOptimizeMolecule(mol) != -1
     except Exception:
+        ff_ok = False
+    if not ff_ok:
         try:
-            AllChem.UFFOptimizeMolecule(mol)
+            ff_ok = AllChem.UFFOptimizeMolecule(mol) != -1
         except Exception:
-            warnings.append("Force-field pre-optimization failed; xTB started from the raw embedding.")
+            ff_ok = False
+    if not ff_ok:
+        warnings.append("Force-field pre-optimization failed or lacked parameters; xTB started from the raw embedding.")
     charge = sum(atom.GetFormalCharge() for atom in mol.GetAtoms())
     unpaired = sum(atom.GetNumRadicalElectrons() for atom in mol.GetAtoms())
     return mol, Chem.MolToXYZBlock(mol), charge, unpaired, warnings
@@ -387,17 +395,29 @@ def xtb_thermo_record(
         (work / "input.xyz").write_text(xyz, encoding="utf-8")
         shared = _base_args(charge, unpaired, solvent)
         try:
-            opt_code, _, _ = run_command(
+            opt_code, _, opt_err = run_command(
                 ["xtb", "input.xyz", "--opt", "--gfn", "2", *shared],
                 timeout_s=timeout_s,
                 cwd=str(work),
             )
             optimized = work / "xtbopt.xyz"
-            geometry_arg = "xtbopt.xyz" if optimized.exists() else "input.xyz"
-            if not optimized.exists():
-                warnings.append("Geometry optimization produced no xtbopt.xyz; the Hessian used the input geometry.")
+            if opt_code != 0 or not optimized.exists():
+                if opt_err.strip():
+                    warnings.append(f"xTB opt stderr: {opt_err.strip().splitlines()[-1]}")
+                warnings.append(
+                    "Geometry optimization failed before Hessian calculation; "
+                    "thermochemistry is not evaluated on a non-stationary input geometry."
+                )
+                return CalculationRecord(
+                    method=method,
+                    tool_version=status.version,
+                    parameters=params,
+                    results={"opt_exit_code": opt_code, "hessian_exit_code": None, "optimized_xyz": None},
+                    status="error",
+                    warnings=warnings,
+                )
             hess_code, hess_out, hess_err = run_command(
-                ["xtb", geometry_arg, "--hess", "--gfn", "2", "--json", *shared],
+                ["xtb", "xtbopt.xyz", "--hess", "--gfn", "2", "--json", *shared],
                 timeout_s=timeout_s,
                 cwd=str(work),
             )

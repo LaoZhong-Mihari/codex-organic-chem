@@ -231,7 +231,9 @@ def test_long_compound_names_no_longer_block_the_route_figure(tmp_path):
     from codex_organic_chem.service import chem_route_check
 
     report = chem_route_check(load("hydroxyproline_double_inversion"), figure_output_dir=str(tmp_path))
-    assert report["figure"]["status"] == "ok"
+    assert report["figure"]["status"] in {"ok", "ok_with_warnings"}
+    layout_warnings = [w for w in report["figure"]["warnings"] if "PNG rasterization" not in w]
+    assert layout_warnings == []
 
 
 def test_conditions_split_into_reagents_and_settings():

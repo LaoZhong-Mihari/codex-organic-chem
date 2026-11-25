@@ -35,12 +35,14 @@ from .structure_review import (
     review_session_result,
     set_review_mode,
 )
+from . import image_tools as _image_tools
+from . import mechanism_steps as _mechanism_steps
 from . import model_kit as _model_kit
 from . import route_check as _route_check
 from . import structure_compare as _structure
 
 
-_DRAWING_KEYS = {"svg", "molblock"}
+_DRAWING_KEYS = {"svg", "molblock", "reaction_svg"}
 _GEOMETRY_KEYS = {"atoms", "bonds"}
 
 
@@ -89,8 +91,36 @@ def chem_ocsr_benchmark(gold_smiles: str, image_dir: str) -> dict[str, Any]:
     return benchmark_ocsr(gold_smiles=gold_smiles, image_dir=image_dir)
 
 
-def chem_parse_scheme(image: str, crops: str, gold_map: str | None = None) -> dict[str, Any]:
-    return parse_scheme(image=image, crops=crops, gold_map=gold_map)
+def chem_parse_scheme(
+    image: str,
+    crops: str | list[dict[str, Any]],
+    gold_map: str | None = None,
+    include_drawings: bool = True,
+) -> dict[str, Any]:
+    result = parse_scheme(image=image, crops=crops, gold_map=gold_map)
+    return result if include_drawings else _without_drawings(result)
+
+
+def chem_crop_image(
+    image_path: str | None = None,
+    boxes: list[dict[str, Any] | list[float]] | str | None = None,
+    output_dir: str | None = None,
+    grid: bool = False,
+    scale: float = 2.0,
+    padding_px: int = 12,
+    normalized: bool | None = None,
+    path: str | None = None,
+) -> dict[str, Any]:
+    """Crop and magnify subregions of a page/scheme image, or render a coordinate grid."""
+    return _image_tools.crop_image(
+        image_path=image_path or path or "",
+        boxes=boxes,
+        output_dir=output_dir,
+        grid=grid,
+        scale=scale,
+        padding_px=padding_px,
+        normalized=normalized,
+    )
 
 
 def chem_input_review(
@@ -212,8 +242,13 @@ def chem_review_demo(language: str = "en", detached: bool = True, which: str = "
     return review_demo(language=language, detached=detached, which=which)
 
 
-def chem_normalize_structure(smiles: str | None = None, molfile: str | None = None) -> dict[str, Any]:
-    return normalize_structure(smiles=smiles, molfile=molfile, source="user").to_dict()
+def chem_normalize_structure(
+    smiles: str | None = None,
+    molfile: str | None = None,
+    include_drawings: bool = True,
+) -> dict[str, Any]:
+    result = normalize_structure(smiles=smiles, molfile=molfile, source="user").to_dict()
+    return result if include_drawings else _without_drawings(result)
 
 
 def chem_draw(
@@ -393,10 +428,22 @@ def chem_literature_search(
     return literature_search(query=query, rows=rows, source=source, year_from=year_from)
 
 
-def chem_reaction_analyze(input: str, mode: str = "sanity_check") -> dict[str, Any]:
-    if mode not in {"forward", "retro", "conditions", "sanity_check"}:
-        return {"status": "error", "warnings": [f"Unsupported reaction analysis mode: {mode}"]}
-    return analyze_reaction(input, mode=mode).to_dict()
+def chem_reaction_analyze(
+    input: str,
+    mode: str = "sanity_check",
+    include_drawings: bool = True,
+) -> dict[str, Any]:
+    canonical_mode = "sanity_check" if mode == "mass_charge_balance" else mode
+    if canonical_mode not in {"forward", "retro", "conditions", "sanity_check"}:
+        return {
+            "status": "error",
+            "warnings": [
+                f"Unsupported reaction analysis mode: {mode}. "
+                "Use 'sanity_check' (alias 'mass_charge_balance'), 'forward', 'retro', or 'conditions'."
+            ],
+        }
+    result = analyze_reaction(input, mode=canonical_mode).to_dict()
+    return result if include_drawings else _without_drawings(result)
 
 
 def chem_mechanism_draft(
@@ -529,11 +576,50 @@ def chem_model_kit(
     return _model_kit.model_kit(task, smiles, **options)
 
 
+def chem_mechanism_steps_check(
+    steps: list[str | dict[str, Any]] | None = None,
+    reactants: str | list[str] | None = None,
+    products: str | list[str] | None = None,
+    conditions: str | None = None,
+    reaction: str | None = None,
+    steps_path: str | None = None,
+    issues_only: bool = False,
+) -> dict[str, Any]:
+    """Audit a proposed sequence of reaction intermediates step by step."""
+    if steps is None and steps_path:
+        import json
+
+        try:
+            loaded = json.loads(Path(steps_path).expanduser().read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return {"status": "error", "warnings": [f"Could not read steps_path: {exc}"]}
+        if isinstance(loaded, dict):
+            steps = loaded.get("steps") or loaded.get("mechanism") or []
+            reactants = reactants if reactants is not None else (loaded.get("reactants") or loaded.get("reactants_smiles"))
+            products = products if products is not None else (loaded.get("products") or loaded.get("products_smiles"))
+            conditions = conditions if conditions is not None else loaded.get("conditions")
+            reaction = reaction if reaction is not None else loaded.get("reaction")
+        elif isinstance(loaded, list):
+            steps = loaded
+    report = _mechanism_steps.mechanism_steps_check(
+        steps=steps or [],
+        reactants=reactants,
+        products=products,
+        conditions=conditions,
+        reaction=reaction,
+    )
+    if issues_only and isinstance(report, dict):
+        report = {k: v for k, v in report.items() if k != "steps"}
+    return report
+
+
 def chem_route_check(
     route: dict[str, Any] | None = None,
     figure_output_dir: str | None = None,
     mcs_timeout_s: int = 6,
     route_path: str | None = None,
+    figure_dir: str | None = None,
+    issues_only: bool = False,
 ) -> dict[str, Any]:
     """Audit a route step by step; optionally draw every numbered compound as a scheme."""
     try:
@@ -541,10 +627,11 @@ def chem_route_check(
     except (ValueError, OSError) as exc:
         return {"status": "error", "warnings": [str(exc)]}
     report = _guard(_route_check.route_check, route, mcs_timeout_s=mcs_timeout_s)
-    if figure_output_dir and report.get("status") not in {"error", "unavailable"}:
+    out_dir = figure_output_dir or figure_dir
+    if out_dir and report.get("status") not in {"error", "unavailable"}:
         try:
             spec = _route_check.route_to_figure_spec(route)
-            figure = render_route_figure(spec=spec, output_dir=figure_output_dir, basename="route", formats=["svg", "png"])
+            figure = render_route_figure(spec=spec, output_dir=out_dir, basename="route", formats=["svg", "png"])
             report["figure"] = {
                 "status": figure.get("status"),
                 "files": figure.get("files") or figure.get("output_files"),
@@ -553,6 +640,8 @@ def chem_route_check(
             }
         except Exception as exc:
             report["figure"] = {"status": "error", "warnings": [f"Route figure failed: {exc}"]}
+    if issues_only and isinstance(report, dict):
+        report = {k: v for k, v in report.items() if k != "steps"}
     return report
 
 
@@ -569,6 +658,28 @@ def python_tool_enabled() -> bool:
     return os.environ.get(PYTHON_ENV_FLAG, "").strip().lower() in {"1", "true", "yes"}
 
 
+def _scrubbed_python_env() -> dict[str, str]:
+    import os
+    import re
+
+    secret_pattern = re.compile(r"(API_KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|AUTH|COOKIE|SESSION|PRIVATE_KEY)", re.IGNORECASE)
+    blocked_exact = {"SSH_AUTH_SOCK", "SSH_AGENT_PID", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"}
+    clean: dict[str, str] = {}
+    for key, value in os.environ.items():
+        if key in blocked_exact or secret_pattern.search(key):
+            continue
+        clean[key] = value
+    return clean
+
+
+def _clip_output(text: str, limit: int) -> tuple[str, bool]:
+    if len(text) <= limit:
+        return text, False
+    half = max(1, (limit - 40) // 2)
+    omitted = len(text) - 2 * half
+    return f"{text[:half]}\n...[truncated {omitted} chars]...\n{text[-half:]}", True
+
+
 def chem_python(code: str, timeout_s: int = 120) -> dict[str, Any]:
     """Run a Python snippet with RDKit and this toolkit importable (opt-in).
 
@@ -576,6 +687,8 @@ def chem_python(code: str, timeout_s: int = 120) -> dict[str, Any]:
     user, so it stays disabled unless CODEX_CHEM_ENABLE_PYTHON=1 is set for the
     MCP server process.
     """
+    import os
+    import signal
     import subprocess
     import sys
     import tempfile
@@ -589,21 +702,32 @@ def chem_python(code: str, timeout_s: int = 120) -> dict[str, Any]:
             ],
         }
     limit = 20000
+    bounded_timeout = max(1, min(int(timeout_s), 900))
     with tempfile.TemporaryDirectory(prefix="codex-chem-python-") as work:
+        proc = subprocess.Popen(
+            [sys.executable, "-I", "-c", code],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=work,
+            env=_scrubbed_python_env(),
+            start_new_session=True,
+        )
         try:
-            proc = subprocess.run(
-                [sys.executable, "-I", "-c", code],
-                capture_output=True,
-                text=True,
-                timeout=max(1, min(int(timeout_s), 900)),
-                cwd=work,
-            )
+            out_raw, err_raw = proc.communicate(timeout=bounded_timeout)
         except subprocess.TimeoutExpired:
-            return {"status": "timeout", "warnings": [f"Snippet exceeded {timeout_s} s."]}
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                proc.kill()
+            proc.communicate()
+            return {"status": "timeout", "warnings": [f"Snippet exceeded {bounded_timeout} s."]}
+    stdout, out_trunc = _clip_output(out_raw or "", limit)
+    stderr, err_trunc = _clip_output(err_raw or "", limit)
     return {
         "status": "ok" if proc.returncode == 0 else "error",
         "exit_code": proc.returncode,
-        "stdout": proc.stdout[-limit:],
-        "stderr": proc.stderr[-limit:],
-        "truncated": len(proc.stdout) > limit or len(proc.stderr) > limit,
+        "stdout": stdout,
+        "stderr": stderr,
+        "truncated": out_trunc or err_trunc,
     }

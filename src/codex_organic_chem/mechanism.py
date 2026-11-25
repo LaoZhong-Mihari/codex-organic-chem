@@ -250,7 +250,9 @@ def draft_mechanism(
     if svg:
         for step in steps:
             step.rendered_svg = svg
-    if quality == "publication" and not structure_confirmed:
+    from .structure_review import review_mode
+
+    if quality == "publication" and not structure_confirmed and review_mode() != "off":
         preview, draw_warnings = reaction_to_svg(reaction_smiles)
         return {
             "status": "awaiting_user_confirmation",

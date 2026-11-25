@@ -140,9 +140,12 @@ def mass_charge_balance(parts: ReactionParts) -> dict:
         include_reagents = magnitude(with_reagents) < magnitude(without_reagents)
     charge_left = reactant_charge + (reagent_charge if include_reagents else 0)
     charge_delta = product_charge - charge_left
-    if charge_delta and not include_reagents and product_charge == reactant_charge + reagent_charge:
-        # Reagents are stoichiometric for charge even though atoms balance
-        # without them (e.g. a counterion carried through unchanged).
+    if (
+        charge_delta
+        and not include_reagents
+        and not reagents
+        and product_charge == reactant_charge + reagent_charge
+    ):
         charge_left = reactant_charge + reagent_charge
         charge_delta = 0
 

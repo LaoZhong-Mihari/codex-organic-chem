@@ -3,7 +3,7 @@
 Titles alone cannot tell whether a paper is precedent for a transformation.
 OpenAlex is queried first because it serves abstracts, citation counts and
 open-access links without an API key; Crossref fills in when OpenAlex is
-unreachable and adds records OpenAlex missed. Only the query text is sent.
+unreachable or returns zero hits. Only the query text is sent.
 
 An abstract is still not a procedure. Scope, yields and failures live in the
 paper and its supporting information; cite a DOI as precedent only for what the
@@ -13,9 +13,13 @@ abstract (or the paper, once read) actually states.
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from collections import OrderedDict
 from typing import Any
 
 
@@ -23,6 +27,9 @@ CROSSREF_WORKS_URL = "https://api.crossref.org/works"
 OPENALEX_WORKS_URL = "https://api.openalex.org/works"
 USER_AGENT = "codex-organic-chem/1.1 (local research assistant)"
 ABSTRACT_LIMIT = 1500
+MAX_CACHE_ENTRIES = 128
+
+_RESPONSE_CACHE: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
 
 def _first(value: Any) -> Any:
@@ -31,10 +38,40 @@ def _first(value: Any) -> Any:
     return value
 
 
+def _user_agent() -> str:
+    mailto = os.environ.get("CODEX_CHEM_MAILTO", "").strip()
+    if mailto:
+        return f"{USER_AGENT} (mailto:{mailto})"
+    return USER_AGENT
+
+
 def _get_json(url: str, timeout_s: int) -> dict[str, Any]:
-    request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=timeout_s) as response:
-        return json.loads(response.read().decode("utf-8"))
+    if url in _RESPONSE_CACHE:
+        _RESPONSE_CACHE.move_to_end(url)
+        return _RESPONSE_CACHE[url]
+    headers = {"Accept": "application/json", "User-Agent": _user_agent()}
+    delays = (0.5, 1.2)
+    last_exc: Exception | None = None
+    for attempt in range(len(delays) + 1):
+        request = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_s) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            _RESPONSE_CACHE[url] = data
+            while len(_RESPONSE_CACHE) > MAX_CACHE_ENTRIES:
+                _RESPONSE_CACHE.popitem(last=False)
+            return data
+        except urllib.error.HTTPError as exc:
+            last_exc = exc
+            if exc.code in {429, 502, 503, 504} and attempt < len(delays):
+                time.sleep(delays[attempt])
+                continue
+            raise
+        except Exception as exc:
+            last_exc = exc
+            raise
+    assert last_exc is not None
+    raise last_exc
 
 
 def _normalize_doi(doi: str | None) -> str | None:
@@ -62,13 +99,31 @@ def _strip_jats(text: str | None) -> str | None:
 def search_openalex(
     query: str, rows: int = 5, timeout_s: int = 15, year_from: int | None = None
 ) -> dict[str, Any]:
+    try:
+        per_page = max(1, min(int(rows), 25))
+        yr = int(year_from) if year_from is not None else None
+    except (TypeError, ValueError) as exc:
+        return {
+            "source": "OpenAlex",
+            "query": query,
+            "status": "error",
+            "url": OPENALEX_WORKS_URL,
+            "warnings": [f"Invalid numeric parameter: {exc}"],
+            "items": [],
+        }
     params: dict[str, Any] = {
         "search": query,
-        "per-page": max(1, min(int(rows), 25)),
+        "per-page": per_page,
         "select": "id,doi,title,publication_year,primary_location,abstract_inverted_index,cited_by_count,type,open_access",
     }
-    if year_from:
-        params["filter"] = f"from_publication_date:{int(year_from)}-01-01"
+    if yr:
+        params["filter"] = f"from_publication_date:{yr}-01-01"
+    mailto = os.environ.get("CODEX_CHEM_MAILTO", "").strip()
+    if mailto:
+        params["mailto"] = mailto
+    api_key = os.environ.get("OPENALEX_API_KEY", "").strip()
+    if api_key:
+        params["api_key"] = api_key
     url = f"{OPENALEX_WORKS_URL}?{urllib.parse.urlencode(params)}"
     try:
         payload = _get_json(url, timeout_s)
@@ -103,15 +158,32 @@ def search_openalex(
     return {"source": "OpenAlex", "query": query, "status": "ok", "url": url, "items": items, "warnings": []}
 
 
-def search_crossref(query: str, rows: int = 5, timeout_s: int = 12) -> dict[str, Any]:
-    params = urllib.parse.urlencode(
-        {
-            "query.bibliographic": query,
-            "rows": max(1, min(int(rows), 10)),
-            "select": "DOI,title,container-title,published-print,published-online,issued,URL,score,type,abstract",
+def search_crossref(
+    query: str, rows: int = 5, timeout_s: int = 12, year_from: int | None = None
+) -> dict[str, Any]:
+    try:
+        limit = max(1, min(int(rows), 10))
+        yr = int(year_from) if year_from is not None else None
+    except (TypeError, ValueError) as exc:
+        return {
+            "source": "Crossref",
+            "query": query,
+            "status": "error",
+            "url": CROSSREF_WORKS_URL,
+            "warnings": [f"Invalid numeric parameter: {exc}"],
+            "items": [],
         }
-    )
-    url = f"{CROSSREF_WORKS_URL}?{params}"
+    query_params: dict[str, Any] = {
+        "query.bibliographic": query,
+        "rows": limit,
+        "select": "DOI,title,container-title,published-print,published-online,issued,URL,score,type,abstract",
+    }
+    if yr:
+        query_params["filter"] = f"from-pub-date:{yr}"
+    mailto = os.environ.get("CODEX_CHEM_MAILTO", "").strip()
+    if mailto:
+        query_params["mailto"] = mailto
+    url = f"{CROSSREF_WORKS_URL}?{urllib.parse.urlencode(query_params)}"
     try:
         payload = _get_json(url, timeout_s)
     except Exception as exc:
@@ -128,6 +200,8 @@ def search_crossref(query: str, rows: int = 5, timeout_s: int = 12) -> dict[str,
         issued = item.get("published-print") or item.get("published-online") or item.get("issued") or {}
         date_parts = issued.get("date-parts", [[]])
         year = date_parts[0][0] if date_parts and date_parts[0] else None
+        if yr and (year is None or year < yr):
+            continue
         doi = _normalize_doi(item.get("DOI"))
         items.append(
             {
@@ -155,34 +229,42 @@ def search_crossref(query: str, rows: int = 5, timeout_s: int = 12) -> dict[str,
 def literature_search(
     query: str, rows: int = 5, source: str = "auto", year_from: int | None = None
 ) -> dict[str, Any]:
-    """Search OpenAlex (abstracts) with Crossref as fallback and supplement."""
+    """Search OpenAlex (abstracts) with Crossref as fallback when OpenAlex fails or finds nothing."""
     if source not in {"auto", "openalex", "crossref"}:
         return {"status": "error", "query": query, "items": [], "warnings": [f"Unknown source {source!r}."]}
+    try:
+        target_rows = max(1, int(rows))
+        yr = int(year_from) if year_from is not None else None
+    except (TypeError, ValueError) as exc:
+        return {"status": "error", "query": query, "items": [], "warnings": [f"Invalid parameter: {exc}"]}
     warnings: list[str] = []
     items: list[dict[str, Any]] = []
     sources: list[str] = []
     urls: list[str] = []
     if source in {"auto", "openalex"}:
-        primary = search_openalex(query, rows=rows, year_from=year_from)
+        primary = search_openalex(query, rows=target_rows, year_from=yr)
         warnings.extend(primary["warnings"])
         urls.append(primary["url"])
         if primary["status"] == "ok":
             sources.append("OpenAlex")
             items.extend(primary["items"])
-    if source == "crossref" or (source == "auto" and len(items) < rows):
-        secondary = search_crossref(query, rows=rows)
+    if source == "crossref" or (source == "auto" and len(items) < target_rows):
+        secondary = search_crossref(query, rows=target_rows, year_from=yr)
         warnings.extend(secondary["warnings"])
         urls.append(secondary["url"])
         if secondary["status"] == "ok":
             sources.append("Crossref")
             seen = {item["doi"] for item in items if item.get("doi")}
+            had_primary = bool(items)
             for item in secondary["items"]:
                 if item.get("doi") and item["doi"] in seen:
                     continue
-                if year_from and item.get("year") and item["year"] < year_from:
+                if yr and (item.get("year") is None or item["year"] < yr):
+                    continue
+                if had_primary and item.get("score") is not None and float(item["score"]) < 15.0:
                     continue
                 items.append(item)
-    items = items[: max(1, int(rows))]
+    items = items[:target_rows]
     without_abstract = sum(1 for item in items if not item.get("abstract"))
     if items and without_abstract:
         warnings.append(

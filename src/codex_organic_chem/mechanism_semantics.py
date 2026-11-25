@@ -16,14 +16,47 @@ if RDKIT_AVAILABLE:
     from rdkit import Chem
 
 
-def parse_molecule(spec: dict[str, Any]) -> Any:
+_SUPPORTED_MAIN_GROUP = {
+    "H",
+    "B",
+    "C",
+    "N",
+    "O",
+    "F",
+    "Si",
+    "P",
+    "S",
+    "Cl",
+    "Br",
+    "I",
+}
+_SPECTATOR_IONS = {"Li", "Na", "K", "Rb", "Cs", "Mg", "Ca", "Ba", "Zn", "Ag", "Cu"}
+
+
+def parse_molecule(spec: dict[str, Any], *, keep_kekule: bool = False) -> Any:
     """Preserve explicit mapped H: it may be an electron-arrow endpoint."""
     if not RDKIT_AVAILABLE:
         return None
     if spec.get("smiles"):
+        smi = spec["smiles"]
         params = Chem.SmilesParserParams()
         params.removeHs = False
-        return Chem.MolFromSmiles(spec["smiles"], params)
+        if keep_kekule and "=" in smi:
+            params.sanitize = False
+            raw = Chem.MolFromSmiles(smi, params)
+            if raw is not None:
+                try:
+                    Chem.SanitizeMol(
+                        raw,
+                        Chem.SanitizeFlags.SANITIZE_ALL
+                        ^ Chem.SanitizeFlags.SANITIZE_SETAROMATICITY,
+                    )
+                    return raw
+                except Exception:
+                    pass
+            params = Chem.SmilesParserParams()
+            params.removeHs = False
+        return Chem.MolFromSmiles(smi, params)
     if spec.get("molfile"):
         return Chem.MolFromMolBlock(spec["molfile"], sanitize=True, removeHs=False)
     return None
@@ -81,14 +114,86 @@ def resolve_states(panel: dict, next_panel: dict | None) -> tuple[list, list | N
     return start, end
 
 
-def _state(entries: list, errors: list[str]) -> dict:
+def _panel_active_maps(panel: dict[str, Any]) -> tuple[set[int], set[tuple[int, int]]]:
+    atom_maps: set[int] = set()
+    bond_maps: set[tuple[int, int]] = set()
+    for arrow in panel.get("arrows", []):
+        for k in ("from_lone_pair_atom_map", "from_atom_map", "to_atom_map", "via_atom_map"):
+            if isinstance(arrow.get(k), int):
+                atom_maps.add(arrow[k])
+        for k in ("from_bond", "to_bond"):
+            val = arrow.get(k)
+            if isinstance(val, (list, tuple)) and len(val) == 2 and all(isinstance(x, int) for x in val):
+                pair = tuple(sorted((int(val[0]), int(val[1]))))
+                bond_maps.add(pair)
+                atom_maps.update(pair)
+    for edit in panel.get("graph_edits", []):
+        if isinstance(edit.get("atom_map"), int):
+            atom_maps.add(edit["atom_map"])
+        val = edit.get("atom_maps")
+        if isinstance(val, (list, tuple)):
+            ints = [int(x) for x in val if isinstance(x, int)]
+            atom_maps.update(ints)
+            if len(ints) == 2:
+                bond_maps.add(tuple(sorted((ints[0], ints[1]))))
+    return atom_maps, bond_maps
+
+
+def _state(
+    entries: list,
+    errors: list[str],
+    *,
+    active_atoms: set[int] | None = None,
+    kekulize_maps: set[int] | None = None,
+    prefer_double_bonds: set[tuple[int, int]] | None = None,
+) -> dict:
     atoms, bonds, inventory = {}, {}, Counter()
     unsupported = []
+    aromatic_maps: set[int] = set()
     for mol_index, mol_spec in entries:
-        mol = parse_molecule(mol_spec)
+        use_kekule = bool(kekulize_maps)
+        mol = parse_molecule(mol_spec, keep_kekule=use_kekule)
         if mol is None:
             errors.append(f"molecule {mol_index}: structure cannot be parsed/sanitized")
             continue
+        mol_maps = {a.GetAtomMapNum() for a in mol.GetAtoms() if a.GetAtomMapNum()}
+        if kekulize_maps and (mol_maps & kekulize_maps) and any(a.GetIsAromatic() for a in mol.GetAtoms()):
+            copy_mol = Chem.Mol(mol)
+            try:
+                Chem.Kekulize(copy_mol, clearAromaticFlags=True)
+                mol = copy_mol
+            except Exception:
+                pass
+        mol_bonds: dict[tuple[int, int], float] = {}
+        for bond in mol.GetBonds():
+            key = tuple(
+                sorted(
+                    (
+                        bond.GetBeginAtom().GetAtomMapNum(),
+                        bond.GetEndAtom().GetAtomMapNum(),
+                    )
+                )
+            )
+            mol_bonds[key] = bond.GetBondTypeAsDouble()
+        # If a 6-membered Kekulized ring chose the opposite alternation from a source double bond, toggle it.
+        if prefer_double_bonds and (mol_maps & (kekulize_maps or set())):
+            for ring in mol.GetRingInfo().AtomRings():
+                if len(ring) != 6:
+                    continue
+                ring_maps = [mol.GetAtomWithIdx(idx).GetAtomMapNum() for idx in ring]
+                if any(m == 0 for m in ring_maps):
+                    continue
+                ring_edges = [
+                    tuple(sorted((ring_maps[i], ring_maps[(i + 1) % 6]))) for i in range(6)
+                ]
+                orders = [mol_bonds.get(e, 0) for e in ring_edges]
+                if sorted(orders) == [1.0, 1.0, 1.0, 2.0, 2.0, 2.0]:
+                    wanted = [e for e in ring_edges if e in prefer_double_bonds]
+                    if wanted and any(mol_bonds[e] == 1.0 for e in wanted):
+                        toggled = {e: (2.0 if mol_bonds[e] == 1.0 else 1.0) for e in ring_edges}
+                        if all(toggled[e] == 2.0 for e in wanted):
+                            mol_bonds.update(toggled)
+        bonds.update(mol_bonds)
         for atom in mol.GetAtoms():
             n = atom.GetAtomMapNum()
             if not n or n in atoms:
@@ -115,39 +220,17 @@ def _state(entries: list, errors: list[str]) -> dict:
                 )
                 / 2,
             }
-            if atom.GetSymbol() not in {
-                "H",
-                "B",
-                "C",
-                "N",
-                "O",
-                "F",
-                "Si",
-                "P",
-                "S",
-                "Cl",
-                "Br",
-                "I",
-            }:
-                unsupported.append("metal/unsupported element electron bookkeeping")
+            sym = atom.GetSymbol()
+            if sym not in _SUPPORTED_MAIN_GROUP:
+                if sym not in _SPECTATOR_IONS or (active_atoms and n in active_atoms):
+                    unsupported.append("metal/unsupported element electron bookkeeping")
             if atom.GetIsAromatic():
-                unsupported.append(
-                    "aromatic electron replay (supply an explicit localized model)"
-                )
-        for bond in mol.GetBonds():
-            key = tuple(
-                sorted(
-                    (
-                        bond.GetBeginAtom().GetAtomMapNum(),
-                        bond.GetEndAtom().GetAtomMapNum(),
-                    )
-                )
-            )
-            bonds[key] = bond.GetBondTypeAsDouble()
+                aromatic_maps.add(n)
     return {
         "atoms": atoms,
         "bonds": bonds,
         "inventory": +inventory,
+        "aromatic_maps": aromatic_maps,
         "unsupported": sorted(set(unsupported)),
     }
 
@@ -196,7 +279,11 @@ def _changes(before: dict, after: dict) -> dict:
 
 
 def _replay(
-    panel: dict, before: dict, errors: list[str], unsupported: list[str]
+    panel: dict,
+    before: dict,
+    errors: list[str],
+    unsupported: list[str],
+    after: dict | None = None,
 ) -> dict:
     atoms, bonds = before["atoms"], before["bonds"]
     bond_delta, charge_delta, radical_delta = Counter(), Counter(), Counter()
@@ -244,12 +331,22 @@ def _replay(
                 raise ValueError("anchor atom map absent from starting state")
             if len(src) == 2 and src not in bonds:
                 raise ValueError(f"source bond {src} does not exist in starting state")
-            for ns, hint in ((src, "from_molecule_index"), (dst, "to_molecule_index")):
-                if hint in arrow and any(
-                    atoms[n]["molecule_index"] != arrow[hint] for n in ns
-                ):
+            if "from_molecule_index" in arrow and any(
+                atoms[n]["molecule_index"] != arrow["from_molecule_index"] for n in src
+            ):
+                raise ValueError(
+                    "from_molecule_index does not refer to the starting-state anchor"
+                )
+            if "to_molecule_index" in arrow:
+                # For an incipient cross-molecule to_bond [u, v], at least the target endpoint must live on to_molecule_index.
+                dst_check = (
+                    [n for n in dst if n not in src]
+                    if len(dst) == 2 and (set(dst) & set(src))
+                    else list(dst)
+                )
+                if any(atoms[n]["molecule_index"] != arrow["to_molecule_index"] for n in dst_check):
                     raise ValueError(
-                        f"{hint} does not refer to the starting-state anchor"
+                        "to_molecule_index does not refer to the starting-state anchor"
                     )
             if len(src) == 2:
                 bond_spent[src] += electrons
@@ -281,15 +378,51 @@ def _replay(
                 charge_delta[donor] += 1
                 charge_delta[acceptor] -= 1
             elif len(dst) == 1:
-                if dst[0] not in src:
-                    raise ValueError(
-                        "bond-to-atom transfer must end on a bond endpoint; use to_bond for migration"
-                    )
-                acceptor = dst[0]
-                donor = next(n for n in src if n != acceptor)
-                bond_delta[src] -= 1
-                charge_delta[donor] += 1
-                charge_delta[acceptor] -= 1
+                target_atom = dst[0]
+                if target_atom in src:
+                    acceptor = target_atom
+                    donor = next(n for n in src if n != acceptor)
+                    bond_delta[src] -= 1
+                    charge_delta[donor] += 1
+                    charge_delta[acceptor] -= 1
+                else:
+                    # Bond (pi or sigma) attacking an external atom target_atom:
+                    # disambiguate which endpoint of src forms the new bond to target_atom.
+                    pivot: int | None = None
+                    via = arrow.get("via_atom_map")
+                    if isinstance(via, int) and via in src:
+                        pivot = via
+                    if pivot is None:
+                        edit_candidates = []
+                        for ed in panel.get("graph_edits", []):
+                            if ed.get("type", ed.get("operation")) in {"form_bond", "change_bond"}:
+                                pair_ed = ed.get("atom_maps")
+                                if isinstance(pair_ed, (list, tuple)) and len(pair_ed) == 2:
+                                    s_ed = {int(pair_ed[0]), int(pair_ed[1])}
+                                    for ep in src:
+                                        if s_ed == {ep, target_atom}:
+                                            edit_candidates.append(ep)
+                        if len(set(edit_candidates)) == 1:
+                            pivot = edit_candidates[0]
+                    if pivot is None and after is not None:
+                        after_candidates = [
+                            ep
+                            for ep in src
+                            if after["bonds"].get(_pair([ep, target_atom]), 0)
+                            > bonds.get(_pair([ep, target_atom]), 0)
+                        ]
+                        if len(after_candidates) == 1:
+                            pivot = after_candidates[0]
+                    if pivot is None:
+                        raise ValueError(
+                            "bond-to-atom attack is ambiguous between the two bond endpoints; "
+                            "specify to_bond: [attaching_atom, target_atom] or via_atom_map"
+                        )
+                    donor = next(n for n in src if n != pivot)
+                    bond_delta[src] -= 1
+                    bond_delta[_pair([pivot, target_atom])] += 1
+                    charge_delta[donor] += 1
+                    charge_delta[target_atom] -= 1
             else:
                 shared = set(src) & set(dst)
                 if len(shared) != 1:
@@ -315,7 +448,10 @@ def _replay(
     predicted_bonds = {
         k: bonds.get(k, 0) + bond_delta[k] for k in bonds.keys() | bond_delta.keys()
     }
-    if any(order < 0 or order != int(order) for order in predicted_bonds.values()):
+    if any(
+        order < 0 or (bond_delta[k] != 0 and order != int(order))
+        for k, order in predicted_bonds.items()
+    ):
         errors.append(
             "electron moves leave a negative/fractional bond order; homolysis requires paired fishhooks"
         )
@@ -388,10 +524,14 @@ def _check_edits(panel: dict, before: dict, after: dict, errors: list[str]) -> N
             }:
                 arrow_errors, arrow_unsupported = [], []
                 contribution = _replay(
-                    {"arrows": [panel["arrows"][edit["source_arrow"] - 1]]},
+                    {
+                        "arrows": [panel["arrows"][edit["source_arrow"] - 1]],
+                        "graph_edits": [edit],
+                    },
                     before,
                     arrow_errors,
                     arrow_unsupported,
+                    after=after,
                 )
                 delta = contribution["bonds"].get(key, 0) - old
                 if not arrow_unsupported and (not delta or delta * (new - old) <= 0):
@@ -412,6 +552,13 @@ def _check_edits(panel: dict, before: dict, after: dict, errors: list[str]) -> N
             errors.append(
                 f"graph_edits do not match the actual {field} changes between states"
             )
+
+
+def prefer_matched(before: dict, after: dict, active_bonds: set[tuple[int, int]]) -> bool:
+    for b in before["bonds"].keys() & after["bonds"].keys():
+        if b not in active_bonds and before["bonds"][b] != after["bonds"][b]:
+            return False
+    return True
 
 
 def validate_semantics(spec: dict[str, Any]) -> dict[str, Any]:
@@ -450,9 +597,11 @@ def validate_semantics(spec: dict[str, Any]) -> dict[str, Any]:
             start, end = resolve_states(
                 panel, panels[index] if index < len(panels) else None
             )
-            before = _state(start, errors)
+            active_atoms, active_bonds = _panel_active_maps(panel)
+            raw_before = _state(start, errors, active_atoms=active_atoms)
+            before = raw_before
             if previous_after is not None and _signature(previous_after) != _signature(
-                before
+                raw_before
             ):
                 errors.append(
                     "previous expected state does not match this starting state; include all participants consistently"
@@ -463,14 +612,15 @@ def validate_semantics(spec: dict[str, Any]) -> dict[str, Any]:
                 )
                 previous_after = None
             else:
-                after = _state(end, errors)
+                raw_after = _state(end, errors, active_atoms=active_atoms)
+                after = raw_after
                 for key, actual in (
-                    ("starting_state", before),
-                    ("expected_state", after),
+                    ("starting_state", raw_before),
+                    ("expected_state", raw_after),
                 ):
                     declared_smiles = panel.get(key, {}).get("reaction_smiles")
                     if declared_smiles and _signature(
-                        _state([(1, {"smiles": declared_smiles})], errors)
+                        _state([(1, {"smiles": declared_smiles})], errors, active_atoms=active_atoms)
                     ) != _signature(actual):
                         errors.append(
                             f"{key}: declared reaction_smiles disagrees with selected molecules"
@@ -481,7 +631,68 @@ def validate_semantics(spec: dict[str, Any]) -> dict[str, Any]:
                     errors.append(
                         "MechanismSpec 2.1 requires explicit graph_edits for each elementary step"
                     )
-                previous_after = after
+                previous_after = raw_after
+                # Localize aromatic rings only when an arrow/edit touches an aromatic bond or aromaticity changes.
+                arom_before = raw_before.get("aromatic_maps", set())
+                arom_after = raw_after.get("aromatic_maps", set())
+                touched_aromatic_bonds = {
+                    b
+                    for b in (raw_before["bonds"].keys() | raw_after["bonds"].keys())
+                    if (raw_before["bonds"].get(b) == 1.5 or raw_after["bonds"].get(b) == 1.5)
+                    and (
+                        b in active_bonds
+                        or raw_before["bonds"].get(b, 0) != raw_after["bonds"].get(b, 0)
+                    )
+                }
+                if touched_aromatic_bonds or (arom_before ^ arom_after):
+                    kekulize_maps = arom_before | arom_after | {m for b in touched_aromatic_bonds for m in b}
+                    from_bonds = {
+                        tuple(sorted((int(a["from_bond"][0]), int(a["from_bond"][1]))))
+                        for a in panel.get("arrows", [])
+                        if isinstance(a.get("from_bond"), (list, tuple)) and len(a["from_bond"]) == 2
+                    }
+                    to_bonds = {
+                        tuple(sorted((int(a["to_bond"][0]), int(a["to_bond"][1]))))
+                        for a in panel.get("arrows", [])
+                        if isinstance(a.get("to_bond"), (list, tuple)) and len(a["to_bond"]) == 2
+                    }
+                    loc_errors: list[str] = []
+                    before = _state(
+                        start,
+                        loc_errors,
+                        active_atoms=active_atoms,
+                        kekulize_maps=kekulize_maps,
+                        prefer_double_bonds=from_bonds,
+                    )
+                    # Also align untouched localized double bonds between before and after
+                    untouched_doubles_before = {
+                        b for b, order in before["bonds"].items() if order == 2.0 and b not in active_bonds
+                    }
+                    after = _state(
+                        end,
+                        loc_errors,
+                        active_atoms=active_atoms,
+                        kekulize_maps=kekulize_maps,
+                        prefer_double_bonds=to_bonds | untouched_doubles_before,
+                    )
+                    untouched_doubles_after = {
+                        b for b, order in after["bonds"].items() if order == 2.0 and b not in active_bonds
+                    }
+                    if untouched_doubles_after and not prefer_matched(before, after, active_bonds):
+                        before = _state(
+                            start,
+                            loc_errors,
+                            active_atoms=active_atoms,
+                            kekulize_maps=kekulize_maps,
+                            prefer_double_bonds=from_bonds | untouched_doubles_after,
+                        )
+                    if any(
+                        before["bonds"].get(b) == 1.5 or after["bonds"].get(b) == 1.5
+                        for b in touched_aromatic_bonds
+                    ):
+                        unsupported.append(
+                            "aromatic electron replay (supply an explicit localized Kekule model)"
+                        )
                 unsupported.extend(before["unsupported"] + after["unsupported"])
                 left, right = before["atoms"], after["atoms"]
                 if left.keys() != right.keys():
@@ -508,7 +719,7 @@ def validate_semantics(spec: dict[str, Any]) -> dict[str, Any]:
                     )
                 result["observed_changes"] = _changes(before, after)
                 if not errors and not unsupported:
-                    predicted = _replay(panel, before, errors, unsupported)
+                    predicted = _replay(panel, before, errors, unsupported, after=after)
                     result["arrow_predicted_changes"] = _changes(before, predicted)
                     if not unsupported and _changes(before, predicted) != _changes(
                         before, after

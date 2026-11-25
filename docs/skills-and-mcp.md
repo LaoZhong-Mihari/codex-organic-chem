@@ -52,14 +52,16 @@ check, and to load the `organic-chemistry-assistant` skill, when the host has
 it, before the first tool call. `CODEX_CHEM_MCP_INSTRUCTIONS=off` leaves them
 out.
 
-The server registers 26 tools, plus `chem_python` when
-`CODEX_CHEM_ENABLE_PYTHON=1`:
+The server registers 28 tools by default (plus `chem_python` when
+`CODEX_CHEM_ENABLE_PYTHON=1`), and also exposes the skill and its reference
+protocols as `chem://skill/...` MCP resources (`CODEX_CHEM_MCP_COMPACT=1` opts
+into a compact 14-tool profile for small-context hosts):
 
 | Purpose | Tools |
 |---|---|
-| Checks that can fail | `chem_compare_structures`, `chem_enumerate`, `chem_route_check`, `chem_model_kit` |
+| Checks that can fail | `chem_compare_structures`, `chem_enumerate`, `chem_route_check`, `chem_mechanism_steps_check`, `chem_model_kit` |
 | Structures and properties | `chem_normalize_structure`, `chem_draw`, `chem_compute` (RDKit, GFN2-xTB, CREST) |
-| Reading images | `chem_parse_image`, `chem_parse_scheme`, `chem_ocsr_benchmark` |
+| Reading images | `chem_crop_image`, `chem_parse_image`, `chem_parse_scheme`, `chem_ocsr_benchmark` |
 | Human review | `chem_input_review`, `chem_structure_review_batch`, `chem_structure_review_result`, `chem_route_review`, `chem_review_mode` |
 | Reactions and routes | `chem_reaction_analyze`, `chem_synthesis_suggest`, `chem_literature_search` |
 | Mechanisms | `chem_mechanism_draft`, `chem_mechanism_validate`, `chem_mechanism_render`, `chem_mechanism_spec_example` |

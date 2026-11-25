@@ -23,12 +23,14 @@ that any step works in the flask.
 from __future__ import annotations
 
 import re
-from collections import Counter
+from collections import Counter, deque
 from typing import Any
 
 from .rdkit_tools import RDKIT_AVAILABLE
 from .structure_compare import (
     StructureError,
+    _permutation_parity,
+    _stereo_bond_cis,
     canonical,
     compare_structures,
     delta_text,
@@ -64,7 +66,7 @@ FUNCTIONAL_GROUPS: dict[str, str] = {
     "diol_1_2": "[OX2H][CX4][CX4][OX2H]",
     "aldehyde": "[CX3H1](=O)[#6]",
     "ketone": "[#6][CX3](=O)[#6]",
-    "enone": "[CX3]=[CX3][CX3]=[OX1]",
+    "enone": "[CX3]=[CX3][CX3;!$([CX3](=O)[OX2,NX3,SX2,F,Cl,Br,I])](=[OX1])[#6,#1]",
     "carboxylic_acid": "[CX3](=O)[OX2H1]",
     "ester": "[#6,#1][CX3](=O)[OX2H0][#6]",
     "lactone": "[#6][CX3;R](=O)[OX2;R][#6]",
@@ -177,9 +179,9 @@ def _pattern(name: str, smarts: str) -> Any:
 def _liabilities(mol: Any) -> Counter:
     """Stereocentres and motifs that are easy to lose under ordinary conditions."""
     found: Counter = Counter()
-    acceptor = Chem.MolFromSmarts("[$([CX3]=[OX1]),$([CX2]#N),$([NX3+](=O)[O-]),$([SX4](=O)=O)]")
+    acceptor = _pattern("_liab_acceptor", "[$([CX3]=[OX1]),$([CX2]#N),$([NX3+](=O)[O-]),$([SX4](=O)=O)]")
     acceptor_atoms = {m[0] for m in mol.GetSubstructMatches(acceptor)}
-    alkene_atoms = {i for m in mol.GetSubstructMatches(Chem.MolFromSmarts("[CX3]=[CX3]")) for i in m}
+    alkene_atoms = {i for m in mol.GetSubstructMatches(_pattern("_liab_alkene", "[CX3]=[CX3]")) for i in m}
     for element in stereo_elements(mol):
         if element["kind"] != "tetrahedral" or not element["specified"]:
             continue
@@ -194,9 +196,9 @@ def _liabilities(mol: Any) -> Counter:
             found["epimerizable_alpha_stereocenter"] += 1
         if neighbors & alkene_atoms:
             found["allylic_stereocenter"] += 1
-    beta_hydroxy = Chem.MolFromSmarts("[CX3](=[OX1])[CX4][CX4][OX2H]")
+    beta_hydroxy = _pattern("_liab_beta_hydroxy", "[CX3](=[OX1])[CX4][CX4][OX2H]")
     found["beta_hydroxy_carbonyl"] += len(mol.GetSubstructMatches(beta_hydroxy))
-    beta_leaving = Chem.MolFromSmarts("[CX3](=[OX1])[CX4;!H0][CX4][$([OX2;H0]),F,Cl,Br,I]")
+    beta_leaving = _pattern("_liab_beta_leaving", "[CX3](=[OX1])[CX4;!H0][CX4][$([OX2;H0]),F,Cl,Br,I]")
     found["beta_leaving_group_carbonyl"] += len(mol.GetSubstructMatches(beta_leaving))
     return +found
 
@@ -862,6 +864,73 @@ _PROTECTION_WORDS = (
     "acetonide",
 )
 
+_MULTISITE_WORDS = _PROTECTION_WORDS + (
+    "reduction/hydrogenation",
+    "oxidation/dehydrogenation",
+    "epoxidation",
+    "dihydroxylation",
+    "dehydration",
+    "hydration or hydrolysis",
+    "chlorination",
+    "bromination",
+    "iodination",
+    "fluorination",
+)
+
+
+def _deprotection_words(label: str) -> str:
+    """Reagent regex justifying the reverse of a protection/derivatisation delta."""
+    if "silylation" in label or "TMS" in label:
+        return (
+            r"tbaf|hf|kf|csf|tasf|tfa|hcl|h2so4|tsoh|ppts|csa|acoh|bf3|bbr3|bcl3|tmsi|"
+            r"acid|h3o|fecl3|cecl3|i2\b|naoh|koh|k2co3|meoh|amberlyst|dowex|sc\(otf\)3|znbr2|deprotect"
+        )
+    if "Boc protection" in label:
+        return (
+            r"tfa|hcl|h2so4|tsoh|hbr|h3po4|hco2h|bf3|tmsotf|bbr3|bcl3|tmsi|znbr2|"
+            r"sc\(otf\)3|yb\(otf\)3|bi\(otf\)3|sio2|heat|reflux|1[5-9]\d ?°?c|2\d\d ?°?c|"
+            r"microwave|acid|h3o|hfip|tfe|deprotect"
+        )
+    if "Cbz protection" in label or "benzylation" in label:
+        return (
+            r"h2\b|pd|pto2|raney|hydrogen|bbr3|bcl3|tmsi|tfa|hf\b|hbr|na/nh3|li/nh3|"
+            r"birch|alcl3|fecl3|ddq|can\b|et3sih|deprotect"
+        )
+    if "PMB protection" in label:
+        return r"ddq|can\b|ceric|tfa|hcl|bbr3|bcl3|alcl3|mgbr2|znbr2|cecl3|h2\b|pd|hydrogen|acid|deprotect"
+    if "Fmoc protection" in label:
+        return (
+            r"piperid|morphol|dbu|dbn|et2nh|dea\b|nh3|tba|naoh|koh|lioh|k2co3|cs2co3|"
+            r"et3n|dipea|ipr2net|base|amine|deprotect"
+        )
+    if "THP protection" in label:
+        return (
+            r"ppts|tsoh|hcl|acoh|tfa|h2so4|csa|amberlyst|dowex|mgbr2|acid|h3o|"
+            r"k2co3|naome|koh|naoh|lioh|dibal|lialh4|\blah\b|red-al|deprotect"
+        )
+    if "acetylation" in label or "benzoylation" in label or "pivaloylation" in label:
+        return (
+            r"k2co3|cs2co3|na2co3|nahco3|naome|naoet|kome|lioh|naoh|koh|ba\(oh\)2|nh3|meoh|"
+            r"dibal|lialh4|\blah\b|red-al|hcl|h2so4|tsoh|hydrol|sapon|esterase|lipase|"
+            r"n2h4|hydrazine|guanidin|kcn|deprotect"
+        )
+    if "acetonide" in label:
+        return (
+            r"tfa|hcl|acoh|tsoh|ppts|csa|h2so4|dowex|amberlyst|fecl3|zn\(no3\)2|bbr3|i2\b|"
+            r"acid|h3o|pd|rh|ir|ru|k2co3|dimedone|morphol|bu3snh|barbitur|deprotect"
+        )
+    if "MOM protection" in label or "tritylation" in label:
+        return (
+            r"tfa|hcl|acoh|tsoh|ppts|csa|h2so4|hco2h|bf3|bbr3|bcl3|tmsbr|tmsi|znbr2|mgbr2|"
+            r"fecl3|cecl3|amberlyst|dowex|acid|h3o|h2\b|pd|deprotect"
+        )
+    if "mesylation" in label or "tosylation" in label or "triflation" in label:
+        return (
+            r"mg\b|na\(hg\)|smi2|li\b|na/nh3|zn\b|lialh4|\blah\b|red-al|superhydride|pd|ni\b|"
+            r"tba|k2co3|cs2co3|naoh|koh|lioh|naome|phsh|hs|thiol|n2h4|deprotect"
+        )
+    return r"tfa|hcl|tbaf|hf|pd|h2\b|lioh|naoh|koh|k2co3|piperid|ddq|can\b|bbr3|acid|base|deprotect"
+
 
 def _counter_key(delta: dict[str, int]) -> tuple[tuple[str, int], ...]:
     return tuple(sorted((k, v) for k, v in delta.items() if v))
@@ -873,7 +942,7 @@ for _label, _delta, _words in NAMED_DELTAS:
     if _delta and any(word in _label for word in _PROTECTION_WORDS):
         reverse = {k: -v for k, v in _delta.items()}
         _DELTA_INDEX.setdefault(_counter_key(reverse), []).append(
-            (f"reverse of [{_label}] (deprotection/removal)", r".")
+            (f"reverse of [{_label}] (deprotection/removal)", _deprotection_words(_label))
         )
 
 
@@ -881,9 +950,9 @@ def interpret_delta(delta: dict[str, int], conditions: str = "") -> dict[str, An
     """Name a formula delta and say whether the stated conditions account for it.
 
     A delta is only called explained when a reagent named in the conditions
-    can cause it. Two simultaneous changes are accepted only if the conditions
-    support both; otherwise a miscounted atom would always find some pair of
-    textbook transformations that happens to add up.
+    can cause it. Multi-site identical protections/deprotections (2x..6x) are
+    recognised when conditions support the unit change; two distinct simultaneous
+    changes are accepted only if the conditions support both.
     """
 
     def supported(words: str) -> bool:
@@ -893,13 +962,27 @@ def interpret_delta(delta: dict[str, int], conditions: str = "") -> dict[str, An
     hits = list(_DELTA_INDEX.get(key, []))
     combos: list[str] = []
     if not hits and key:
+        target = Counter(dict(key))
+        # Check k-fold identical multi-site protection/deprotection/redox (e.g. per-acetylation of a triol)
+        for mult in (2, 3, 4, 5, 6):
+            if all(v % mult == 0 for v in target.values()):
+                unit_key = _counter_key({el: v // mult for el, v in target.items()})
+                unit_hits = [
+                    (f"{mult}x [{lbl}]", words)
+                    for lbl, words in _DELTA_INDEX.get(unit_key, [])
+                    if any(w in lbl for w in _MULTISITE_WORDS)
+                ]
+                if unit_hits:
+                    hits.extend(unit_hits)
+                    break
+    if not hits and key:
         signed: list[tuple[str, dict[str, int], str]] = []
         for label, d, words in NAMED_DELTAS:
             if not d:
                 continue
             signed.append((label, d, words))
             if any(word in label for word in _PROTECTION_WORDS):
-                signed.append((f"reverse of [{label}]", {k: -v for k, v in d.items()}, r"."))
+                signed.append((f"reverse of [{label}]", {k: -v for k, v in d.items()}, _deprotection_words(label)))
         target = Counter(dict(key))
         for i, (label_a, da, words_a) in enumerate(signed):
             if not supported(words_a):
@@ -951,17 +1034,266 @@ def _map_number_mapping(reactant: Any, product: Any) -> dict[int, int] | None:
     return {r_maps[n]: p_maps[n] for n in shared}
 
 
-def _with_stereo_hs(mol: Any) -> Any:
-    centres = [e["atom_index"] for e in stereo_elements(mol) if e["kind"] == "tetrahedral"]
+def _with_stereo_hs(mol: Any, elements: list[dict[str, Any]] | None = None) -> Any:
+    elems = elements if elements is not None else stereo_elements(mol)
+    centres = [e["atom_index"] for e in elems if e["kind"] == "tetrahedral"]
     centres = [i for i in centres if mol.GetAtomWithIdx(i).GetTotalNumHs() > 0]
     if not centres:
         return Chem.Mol(mol)
     return Chem.AddHs(mol, onlyOnAtoms=centres)
 
 
-def _stereo_events(reactant: Any, product: Any, mapping: dict[int, int]) -> dict[str, Any]:
+def _active_stereo_atoms(mol: Any, elems: list[dict[str, Any]]) -> set[int]:
+    active: set[int] = set()
+    for elem in elems:
+        if elem["kind"] == "tetrahedral":
+            idx = elem["atom_index"]
+            active.add(idx)
+            for nb in mol.GetAtomWithIdx(idx).GetNeighbors():
+                active.add(nb.GetIdx())
+                if nb.GetAtomicNum() not in (1, 6):
+                    for nb2 in nb.GetNeighbors():
+                        active.add(nb2.GetIdx())
+        elif "atom_indices" in elem:
+            for idx in elem["atom_indices"]:
+                active.add(idx)
+                for nb in mol.GetAtomWithIdx(idx).GetNeighbors():
+                    active.add(nb.GetIdx())
+    return active
+
+
+def _distinct_core_matches(mol_lab: Any, query: Any, active_mol_atoms: set[int]) -> list[tuple[int, ...]]:
+    """Enumerate MCS query matches modulo automorphisms of non-stereogenic pendant groups."""
+    u_matches = list(mol_lab.GetSubstructMatches(query, uniquify=True, maxMatches=32))
+    if not u_matches:
+        return []
+    n_q = query.GetNumAtoms()
+    q_adj = [[nb.GetIdx() for nb in query.GetAtomWithIdx(i).GetNeighbors()] for i in range(n_q)]
+    out: list[tuple[int, ...]] = []
+    seen_sigs: set[tuple[Any, ...]] = set()
+    for m0 in u_matches:
+        active_q = {q for q, m_idx in enumerate(m0) if m_idx in active_mol_atoms}
+        atom_set = frozenset(m0)
+        if not active_q:
+            sig = (atom_set, ())
+            if sig not in seen_sigs:
+                seen_sigs.add(sig)
+                out.append(m0)
+            continue
+        plain_q = Chem.RWMol()
+        for q in range(n_q):
+            atom = Chem.Atom(6)
+            atom.SetNoImplicit(True)
+            atom.SetIsotope(mol_lab.GetAtomWithIdx(m0[q]).GetIsotope())
+            plain_q.AddAtom(atom)
+        for bond in query.GetBonds():
+            plain_q.AddBond(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), Chem.BondType.SINGLE)
+        q_mol = plain_q.GetMol()
+        q_mol.UpdatePropertyCache(strict=False)
+        q_ranks = list(Chem.CanonicalRankAtoms(q_mol, breakTies=False))
+        keep = set(range(n_q))
+        changed = True
+        while changed:
+            changed = False
+            for v in list(keep):
+                rem = keep - {v}
+                if not rem:
+                    continue
+                visited: set[int] = set()
+                for start in q_adj[v]:
+                    if start not in rem or start in visited:
+                        continue
+                    comp: set[int] = set()
+                    dq = deque([start])
+                    visited.add(start)
+                    while dq:
+                        cur = dq.popleft()
+                        comp.add(cur)
+                        for nb in q_adj[cur]:
+                            if nb in rem and nb not in visited:
+                                visited.add(nb)
+                                dq.append(nb)
+                    if comp.isdisjoint(active_q) and len(keep - comp) >= 1:
+                        keep -= comp
+                        changed = True
+                        break
+                if changed:
+                    break
+        core_list = sorted(keep)
+        core_q = Chem.RWMol()
+        for q in core_list:
+            atom = Chem.Atom(6)
+            atom.SetNoImplicit(True)
+            atom.SetIsotope(1000 + q_ranks[q])
+            core_q.AddAtom(atom)
+        q_to_c = {q: i for i, q in enumerate(core_list)}
+        for bond in query.GetBonds():
+            u, v = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+            if u in q_to_c and v in q_to_c:
+                core_q.AddBond(q_to_c[u], q_to_c[v], Chem.BondType.SINGLE)
+        core_mol = core_q.GetMol()
+        core_mol.UpdatePropertyCache(strict=False)
+        core_auts = core_mol.GetSubstructMatches(core_mol, uniquify=False, maxMatches=64)
+        for aut in core_auts:
+            pin_query = Chem.RWMol(q_mol)
+            pin_target = Chem.RWMol(q_mol)
+            for i, q_idx in enumerate(core_list):
+                pin_query.GetAtomWithIdx(q_idx).SetIsotope(50000 + i)
+                pin_target.GetAtomWithIdx(core_list[aut[i]]).SetIsotope(50000 + i)
+            pq, pt = pin_query.GetMol(), pin_target.GetMol()
+            pq.UpdatePropertyCache(strict=False)
+            pt.UpdatePropertyCache(strict=False)
+            ext = pt.GetSubstructMatch(pq)
+            if not ext:
+                continue
+            full_match = tuple(m0[ext[q]] for q in range(n_q))
+            if not all(
+                mol_lab.GetBondBetweenAtoms(full_match[b.GetBeginAtomIdx()], full_match[b.GetEndAtomIdx()]) is not None
+                for b in query.GetBonds()
+            ):
+                continue
+            sig = (atom_set, tuple((q, full_match[q]) for q in sorted(active_q)))
+            if sig not in seen_sigs:
+                seen_sigs.add(sig)
+                out.append(full_match)
+        if m0 not in out and not any(s[0] == atom_set for s in seen_sigs):
+            out.append(m0)
+    return out
+
+
+def _alkene_addition_mismatches(
+    reactant: Any,
+    product: Any,
+    mapping: dict[int, int],
+    conditions: str = "",
+    *,
+    product_all_hs: Any | None = None,
+    ring_only: bool = False,
+) -> list[dict[str, Any]]:
+    """Check concerted syn/anti stereospecificity when a defined E/Z alkene forms two stereocentres."""
+    mismatches: list[dict[str, Any]] = []
+    mapped_product_atoms = set(mapping.values())
+    tags = (Chem.ChiralType.CHI_TETRAHEDRAL_CW, Chem.ChiralType.CHI_TETRAHEDRAL_CCW)
+    ph: Any | None = product_all_hs
+    for bond in reactant.GetBonds():
+        is_cis = _stereo_bond_cis(bond)
+        if is_cis is None:
+            continue
+        stereo_atoms = list(bond.GetStereoAtoms())
+        if len(stereo_atoms) != 2:
+            continue
+        r1, r2 = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+        sa, sb = stereo_atoms
+        if reactant.GetBondBetweenAtoms(r1, sa) is None:
+            sa, sb = sb, sa
+        p1, p2 = mapping.get(r1), mapping.get(r2)
+        s1_p, s2_p = mapping.get(sa), mapping.get(sb)
+        if p1 is None or p2 is None or s1_p is None or s2_p is None:
+            continue
+        pb = product.GetBondBetweenAtoms(p1, p2)
+        if pb is None or pb.GetBondType() != Chem.BondType.SINGLE:
+            continue
+        if ph is None:
+            ph = Chem.AddHs(product)
+        pa1, pa2 = ph.GetAtomWithIdx(p1), ph.GetAtomWithIdx(p2)
+        if pa1.GetChiralTag() not in tags or pa2.GetChiralTag() not in tags:
+            continue
+        if pa1.GetDegree() != 4 or pa2.GetDegree() != 4:
+            continue
+        if ph.GetBondBetweenAtoms(p1, s1_p) is None or ph.GetBondBetweenAtoms(p2, s2_p) is None:
+            continue
+
+        def _other_inherited_neighbor(r_idx: int, r_partner: int, r_stereo: int, p_idx: int) -> int | None:
+            r_atom = reactant.GetAtomWithIdx(r_idx)
+            other_heavy = [n.GetIdx() for n in r_atom.GetNeighbors() if n.GetIdx() not in (r_partner, r_stereo)]
+            if len(other_heavy) == 1:
+                mapped_nb = mapping.get(other_heavy[0])
+                if mapped_nb is not None and ph.GetBondBetweenAtoms(p_idx, mapped_nb) is not None:
+                    return mapped_nb
+                return None
+            if len(other_heavy) == 0 and r_atom.GetTotalNumHs() == 1:
+                hs = [n.GetIdx() for n in ph.GetAtomWithIdx(p_idx).GetNeighbors() if ph.GetAtomWithIdx(n.GetIdx()).GetAtomicNum() == 1]
+                return hs[0] if len(hs) == 1 else None
+            return None
+
+        o1_p = _other_inherited_neighbor(r1, r2, sa, p1)
+        o2_p = _other_inherited_neighbor(r2, r1, sb, p2)
+        if o1_p is None or o2_p is None:
+            continue
+        x1s = [n.GetIdx() for n in pa1.GetNeighbors() if n.GetIdx() not in (p2, s1_p, o1_p)]
+        x2s = [n.GetIdx() for n in pa2.GetNeighbors() if n.GetIdx() not in (p1, s2_p, o2_p)]
+        if len(x1s) != 1 or len(x2s) != 1:
+            continue
+        x1, x2 = x1s[0], x2s[0]
+        if x1 in mapped_product_atoms or x2 in mapped_product_atoms:
+            continue
+        nbrs1 = [n.GetIdx() for n in pa1.GetNeighbors()]
+        nbrs2 = [n.GetIdx() for n in pa2.GetNeighbors()]
+        par1 = (_permutation_parity(nbrs1, [p2, x1, s1_p, o1_p]) == 0) == (
+            pa1.GetChiralTag() == Chem.ChiralType.CHI_TETRAHEDRAL_CW
+        )
+        par2 = (_permutation_parity(nbrs2, [p1, x2, s2_p, o2_p]) == 0) == (
+            pa2.GetChiralTag() == Chem.ChiralType.CHI_TETRAHEDRAL_CW
+        )
+        inferred = "syn" if (par1 == par2) == (not is_cis) else "anti"
+        alkene_geom = "Z" if is_cis else "E"
+        expected: str | None = None
+        reaction_type = ""
+        if x1 == x2:
+            expected = "syn"
+            sym = ph.GetAtomWithIdx(x1).GetSymbol()
+            reaction_type = f"3-membered {sym}-ring formation"
+        elif not ring_only:
+            sym1 = ph.GetAtomWithIdx(x1).GetSymbol()
+            sym2 = ph.GetAtomWithIdx(x2).GetSymbol()
+            if (
+                sym1 == sym2 == "O"
+                and re.search(r"\boso4\b|\bk2oso4\b|ad-mix|\bkmno4\b|upjohn", conditions, re.IGNORECASE)
+                and not re.search(r"prevost|woodward|\bagoac\b|\bag2co3\b", conditions, re.IGNORECASE)
+            ):
+                expected = "syn"
+                reaction_type = "syn-dihydroxylation"
+            elif (
+                sym1 == sym2
+                and sym1 in {"Br", "Cl"}
+                and re.search(r"\bbr2\b|\bcl2\b|pyh.*br3", conditions, re.IGNORECASE)
+                and not re.search(r"\bhv\b|light|aibn|peroxide|h2o|meoh|etoh", conditions, re.IGNORECASE)
+            ):
+                expected = "anti"
+                reaction_type = "anti-dihalogenation"
+        if expected and inferred != expected:
+            mismatches.append(
+                {
+                    "reactant_bond": [r1, r2],
+                    "product_atoms": [p1, p2],
+                    "alkene_geometry": alkene_geom,
+                    "expected_addition": expected,
+                    "drawn_addition": inferred,
+                    "reaction_type": reaction_type,
+                }
+            )
+    return mismatches
+
+
+def _stereo_events(
+    reactant: Any,
+    product: Any,
+    mapping: dict[int, int],
+    *,
+    reactant_h: Any | None = None,
+    product_h: Any | None = None,
+    reactant_elements: list[dict[str, Any]] | None = None,
+    product_tetrahedral: dict[int, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Follow every stereo element of the reactant into the product."""
-    reactant_h, product_h = _with_stereo_hs(reactant), _with_stereo_hs(product)
+    r_elems = reactant_elements if reactant_elements is not None else stereo_elements(reactant)
+    if product_tetrahedral is None:
+        p_all = stereo_elements(product)
+        p_tet = {e["atom_index"]: e for e in p_all if e["kind"] == "tetrahedral"}
+    else:
+        p_tet = product_tetrahedral
+    r_h = reactant_h if reactant_h is not None else _with_stereo_hs(reactant, r_elems)
+    p_h = product_h if product_h is not None else _with_stereo_hs(product)
     events: dict[str, list[dict[str, Any]]] = {
         "retained": [],
         "inverted": [],
@@ -970,10 +1302,7 @@ def _stereo_events(reactant: Any, product: Any, mapping: dict[int, int]) -> dict
         "lost_definition": [],
         "ambiguous": [],
     }
-    product_elements = {
-        e["atom_index"]: e for e in stereo_elements(product) if e["kind"] == "tetrahedral"
-    }
-    for element in stereo_elements(reactant):
+    for element in r_elems:
         if element["kind"] == "tetrahedral":
             if not element["specified"]:
                 continue
@@ -989,7 +1318,7 @@ def _stereo_events(reactant: Any, product: Any, mapping: dict[int, int]) -> dict
                 events["ambiguous"].append({**entry, "reason": "atom not traced into the product"})
                 continue
             entry["product_atom"] = p_idx
-            target = product_elements.get(p_idx)
+            target = p_tet.get(p_idx)
             if target is None:
                 events["destroyed"].append(entry)
                 continue
@@ -998,8 +1327,8 @@ def _stereo_events(reactant: Any, product: Any, mapping: dict[int, int]) -> dict
                 events["lost_definition"].append(entry)
                 continue
             relation, detail = tetrahedral_relation(
-                reactant_h.GetAtomWithIdx(r_idx),
-                product_h.GetAtomWithIdx(p_idx),
+                r_h.GetAtomWithIdx(r_idx),
+                p_h.GetAtomWithIdx(p_idx),
                 mapping,
                 pair_unmapped=True,
             )
@@ -1017,7 +1346,7 @@ def _stereo_events(reactant: Any, product: Any, mapping: dict[int, int]) -> dict
                 events["inverted" if changed else "epimerized_without_bond_change"].append(entry)
             else:
                 events["ambiguous"].append({**entry, "reason": detail.get("reason", relation)})
-        else:
+        elif element["kind"] == "double_bond":
             if not element["specified"]:
                 continue
             a1, a2 = element["atom_indices"]
@@ -1065,9 +1394,9 @@ def _same_element_exchange(reactant: Any, product: Any, r_idx: int, p_idx: int, 
     return None
 
 
-def _event_cost(events: dict[str, Any]) -> tuple[int, int, int]:
+def _event_cost(events: dict[str, Any], ring_addition_mismatches: int = 0) -> tuple[int, int, int]:
     return (
-        len(events["epimerized_without_bond_change"]) + len(events["ambiguous"]),
+        len(events["epimerized_without_bond_change"]) + len(events["ambiguous"]) + ring_addition_mismatches,
         len(events["inverted"]),
         len(events["lost_definition"]),
     )
@@ -1086,11 +1415,32 @@ def map_reactant_to_product(
     implies the fewest unexplained stereo changes is chosen, so an inversion is
     reported only when no equivalent mapping avoids it.
     """
+    r_elems = stereo_elements(reactant)
+    p_elems = stereo_elements(product)
+    p_tet = {e["atom_index"]: e for e in p_elems if e["kind"] == "tetrahedral"}
+    r_h = _with_stereo_hs(reactant, r_elems)
+    p_h = _with_stereo_hs(product, p_elems)
+    has_spec_db = any(e["kind"] == "double_bond" and e["specified"] for e in r_elems)
+    p_all_hs = Chem.AddHs(product) if has_spec_db else None
+
     direct = _map_number_mapping(reactant, product)
     if direct is not None:
-        return {"method": "atom_maps", "mapping": direct, "events": _stereo_events(reactant, product, direct)}
+        return {
+            "method": "atom_maps",
+            "mapping": direct,
+            "events": _stereo_events(
+                reactant,
+                product,
+                direct,
+                reactant_h=r_h,
+                product_h=p_h,
+                reactant_elements=r_elems,
+                product_tetrahedral=p_tet,
+            ),
+        }
+    r_lab, p_lab = _labelled(reactant), _labelled(product, blocked_product_atoms)
     result = rdFMCS.FindMCS(
-        [_labelled(reactant), _labelled(product, blocked_product_atoms)],
+        [r_lab, p_lab],
         atomCompare=rdFMCS.AtomCompare.CompareIsotopes,
         bondCompare=rdFMCS.BondCompare.CompareAny,
         ringMatchesRingOnly=False,
@@ -1099,17 +1449,50 @@ def map_reactant_to_product(
         timeout=timeout_s,
     )
     if not result.numAtoms:
-        return {"method": "mcs", "mapping": {}, "events": _stereo_events(reactant, product, {}), "timed_out": result.canceled}
+        return {
+            "method": "mcs",
+            "mapping": {},
+            "events": _stereo_events(
+                reactant,
+                product,
+                {},
+                reactant_h=r_h,
+                product_h=p_h,
+                reactant_elements=r_elems,
+                product_tetrahedral=p_tet,
+            ),
+            "timed_out": result.canceled,
+        }
     query = Chem.MolFromSmarts(result.smartsString)
-    r_lab, p_lab = _labelled(reactant), _labelled(product, blocked_product_atoms)
-    r_matches = r_lab.GetSubstructMatches(query, uniquify=False, maxMatches=24)
-    p_matches = p_lab.GetSubstructMatches(query, uniquify=False, maxMatches=48)
+    r_matches = _distinct_core_matches(r_lab, query, _active_stereo_atoms(reactant, r_elems))
+    p_matches = _distinct_core_matches(p_lab, query, _active_stereo_atoms(product, p_elems))
+    if not r_matches:
+        r_matches = list(r_lab.GetSubstructMatches(query, uniquify=False, maxMatches=24))
+    if not p_matches:
+        p_matches = list(p_lab.GetSubstructMatches(query, uniquify=False, maxMatches=48))
     best: dict[str, Any] | None = None
-    for r_match in r_matches[:6]:
-        for p_match in p_matches:
+    for r_match in r_matches[:16]:
+        for p_match in p_matches[:32]:
             mapping = dict(zip(r_match, p_match))
-            events = _stereo_events(reactant, product, mapping)
-            cost = _event_cost(events)
+            events = _stereo_events(
+                reactant,
+                product,
+                mapping,
+                reactant_h=r_h,
+                product_h=p_h,
+                reactant_elements=r_elems,
+                product_tetrahedral=p_tet,
+            )
+            ring_mm = (
+                len(
+                    _alkene_addition_mismatches(
+                        reactant, product, mapping, product_all_hs=p_all_hs, ring_only=True
+                    )
+                )
+                if has_spec_db
+                else 0
+            )
+            cost = _event_cost(events, ring_mm)
             if best is None or cost < best["cost"]:
                 best = {"mapping": mapping, "events": events, "cost": cost}
             if cost == (0, 0, 0):
@@ -1149,6 +1532,29 @@ def _delta(after: Counter, before: Counter) -> dict[str, int]:
     return {k: after.get(k, 0) - before.get(k, 0) for k in sorted(keys) if after.get(k, 0) != before.get(k, 0)}
 
 
+_GROUP_PARENTS: dict[str, str] = {
+    "TMS_ether": "silyl_ether",
+    "TES_ether": "silyl_ether",
+    "TBS_ether": "silyl_ether",
+    "TIPS_ether": "silyl_ether",
+    "TBDPS_ether": "silyl_ether",
+    "PMB_ether": "benzyl_type_ether",
+    "acetate_ester": "ester",
+    "benzoate_ester": "ester",
+    "pivalate_ester": "ester",
+    "methyl_ester": "ester",
+    "tert_butyl_ester": "ester",
+    "benzyl_ester": "ester",
+    "lactone": "ester",
+    "Boc_carbamate": "carbamate",
+    "Cbz_carbamate": "carbamate",
+    "Fmoc_carbamate": "carbamate",
+    "weinreb_amide": "amide",
+    "terminal_alkyne": "alkyne",
+    "triflate": "sulfonate_ester",
+}
+
+
 class _Compounds:
     def __init__(self, raw: Any) -> None:
         self.smiles: dict[str, str] = {}
@@ -1173,10 +1579,17 @@ class _Compounds:
             self.errors.append(_issue("blocking", "unparseable_structure", f"Compound {key}: {exc}", compound=key))
 
     def resolve(self, ref: Any) -> str | None:
-        """Return the compound key for a reference; inline SMILES are registered."""
+        """Return the compound key for a reference; inline SMILES are registered.
+
+        Single bare letters (e.g. ``"C"``, ``"B"``, ``"I"``) not present in
+        ``compounds`` are treated as undefined compound IDs rather than silently
+        parsed as methane, borane, or hydrogen iodide.
+        """
         ref = str(ref)
         if ref in self.mols:
             return ref
+        if len(ref) == 1 and ref.isalpha():
+            return None
         if any(ch in ref for ch in "()=#[]@") or ref.isalpha() or Chem.MolFromSmiles(ref) is not None:
             try:
                 key = f"inline:{ref}"
@@ -1290,6 +1703,26 @@ def route_check(route: dict[str, Any], *, mcs_timeout_s: int = 6) -> dict[str, A
                 balance["status"] = "closed"
         else:
             interpretation = interpret_delta(delta, conditions)
+            d_key = _counter_key(delta)
+            if interpretation["status"] == "consistent_with_conditions":
+                if d_key == _counter_key(_d("-C -4H -O")) and not (
+                    any(m.HasSubstructMatch(_pattern("_methoxy", "[OX2][CH3]")) for m in reactant_mols)
+                    or re.search(r"\bmeoh\b|methanol", conditions, re.IGNORECASE)
+                ):
+                    interpretation = {
+                        **interpretation,
+                        "status": "unexplained",
+                        "matches": [],
+                    }
+                elif d_key == _counter_key(_d("-2C -6H -O")) and not (
+                    any(m.HasSubstructMatch(_pattern("_ethoxy", "[OX2][CH2][CH3]")) for m in reactant_mols)
+                    or re.search(r"\betoh\b|ethanol", conditions, re.IGNORECASE)
+                ):
+                    interpretation = {
+                        **interpretation,
+                        "status": "unexplained",
+                        "matches": [],
+                    }
             balance.update(interpretation)
             if interpretation["status"] == "unexplained":
                 local.append(
@@ -1337,6 +1770,7 @@ def route_check(route: dict[str, Any], *, mcs_timeout_s: int = 6) -> dict[str, A
         methods = set()
         traced_centres: set[int] = set()
         lost_atoms: Counter = Counter()
+        alkene_addition_mismatches: list[dict[str, Any]] = []
         mapping_complete = True
         ordered = sorted(
             zip(reactant_keys, reactant_mols), key=lambda item: item[1].GetNumHeavyAtoms(), reverse=True
@@ -1366,6 +1800,8 @@ def route_check(route: dict[str, Any], *, mcs_timeout_s: int = 6) -> dict[str, A
                     stereo_report[bucket].append({"reactant": key.removeprefix("inline:"), **entry})
                     if "product_atom" in entry:
                         traced_centres.add(entry["product_atom"])
+            for mm in _alkene_addition_mismatches(reactant, product_mol, mapped["mapping"], conditions):
+                alkene_addition_mismatches.append({"reactant": key.removeprefix("inline:"), **mm})
         inverting = bool(_INVERTING_CONDITIONS.search(conditions))
         kept_inverted = []
         for entry in stereo_report["inverted"]:
@@ -1453,6 +1889,20 @@ def route_check(route: dict[str, Any], *, mcs_timeout_s: int = 6) -> dict[str, A
         created_total += len(created)
         inverted_total += len(stereo_report["inverted"])
         destroyed_total += len(stereo_report["destroyed"])
+        if alkene_addition_mismatches:
+            report["stereo"]["alkene_addition_mismatches"] = alkene_addition_mismatches
+            first_mm = alkene_addition_mismatches[0]
+            local.append(
+                _issue(
+                    "review",
+                    "stereospecific_alkene_addition_mismatch",
+                    f"A ({first_mm['alkene_geometry']})-alkene underwent {first_mm['reaction_type']} "
+                    f"(expected {first_mm['expected_addition']} addition), but the product stereocentres "
+                    f"correspond to {first_mm['drawn_addition']} addition across that double bond. "
+                    "Check the wedges on the newly formed stereocentres or justify a stepwise isomerising pathway.",
+                    elements=alkene_addition_mismatches,
+                )
+            )
         if stereo_report.get("derivatised_but_inverted"):
             local.append(
                 _issue(
@@ -1562,10 +2012,20 @@ def route_check(route: dict[str, Any], *, mcs_timeout_s: int = 6) -> dict[str, A
         for rule_name, pattern, risks in _RULES_COMPILED:
             if not pattern.search(conditions):
                 continue
-            for name, why in risks.items():
-                # the selectivity question already covers a partly converted group
-                if name in bystanders and name not in partially_converted:
-                    checks.append({"reagent_class": rule_name, "group": name, "count": bystanders[name], "risk": why})
+            rule_hits = [
+                (name, bystanders[name], why)
+                for name, why in risks.items()
+                if name in bystanders and name not in partially_converted
+            ]
+            parent_deductions: Counter = Counter()
+            for name, count, _why in rule_hits:
+                parent = _GROUP_PARENTS.get(name)
+                if parent:
+                    parent_deductions[parent] += count
+            for name, count, why in rule_hits:
+                effective = count - parent_deductions.get(name, 0)
+                if effective > 0:
+                    checks.append({"reagent_class": rule_name, "group": name, "count": effective, "risk": why})
         if checks:
             report["compatibility_checks"] = checks
             summary = "; ".join(f"{c['group']} x{c['count']} vs {c['reagent_class']} ({c['risk']})" for c in checks[:6])
@@ -1766,12 +2226,12 @@ def route_to_figure_spec(
             rows.append({"items": items})
             items = []
             previous_product = None
-        main = [k for k in reactant_keys if k != previous_product]
         if previous_product is None or previous_product not in reactant_keys:
             first, rest = reactant_keys[0], reactant_keys[1:]
             items.append(molecule(first))
         else:
-            rest = main
+            prev_idx = reactant_keys.index(previous_product)
+            rest = reactant_keys[:prev_idx] + reactant_keys[prev_idx + 1 :]
         for key in rest:
             items.append({"type": "plus"})
             items.append(molecule(key))

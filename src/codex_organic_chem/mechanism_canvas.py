@@ -1626,12 +1626,16 @@ def validate_mechanism_spec(spec: dict[str, Any]) -> dict[str, Any]:
                 blocking_issues.append(f"{panel_label}, molecule {mol_index}: provide mapped SMILES or Molfile.")
             mol, mol_warnings = _parse_molecule(mol_spec)
             warnings.extend(f"{panel_label}, molecule {mol_index}: {warning}" for warning in mol_warnings)
+            allow_stereo_iso = bool(spec.get("layout", {}).get("allow_stereo_and_isotopes"))
             if mol is None:
                 blocking_issues.append(f"{panel_label}, molecule {mol_index}: structure could not be parsed/sanitized.")
-            elif any(a.GetChiralTag() != Chem.ChiralType.CHI_UNSPECIFIED for a in mol.GetAtoms()) or any(b.GetStereo() != Chem.BondStereo.STEREONONE for b in mol.GetBonds()):
-                blocking_issues.append(f"{panel_label}, molecule {mol_index}: this canvas does not render stereo wedges/E-Z annotations faithfully; use a stereo-capable chemical editor.")
-            if mol is not None and any(a.GetIsotope() for a in mol.GetAtoms()):
-                blocking_issues.append(f"{panel_label}, molecule {mol_index}: isotope labels are not yet supported by this canvas.")
+            elif not allow_stereo_iso and (
+                any(a.GetChiralTag() != Chem.ChiralType.CHI_UNSPECIFIED for a in mol.GetAtoms())
+                or any(b.GetStereo() != Chem.BondStereo.STEREONONE for b in mol.GetBonds())
+            ):
+                blocking_issues.append(f"{panel_label}, molecule {mol_index}: this canvas does not render stereo wedges/E-Z annotations faithfully in editor exports; set layout.allow_stereo_and_isotopes=true for SVG depiction or use a stereo-capable chemical editor.")
+            if mol is not None and not allow_stereo_iso and any(a.GetIsotope() for a in mol.GetAtoms()):
+                blocking_issues.append(f"{panel_label}, molecule {mol_index}: isotope labels are not yet supported in editor exports; set layout.allow_stereo_and_isotopes=true for SVG depiction.")
             if mol is not None and len(Chem.GetMolFrags(mol)) > 1 and arrows:
                 warnings.append(
                     f"{panel_label}, molecule {mol_index}: contains disconnected fragments. "
@@ -2532,8 +2536,12 @@ def render_cdxml_document(spec: dict[str, Any], warnings: list[str], *, scene_en
         panel_atom_ids_first: dict[int, str] = {}
         panel_bond_ids: dict[tuple[int, int, int], str] = {}
         panel_bond_ids_first: dict[tuple[int, int], str] = {}
+        object_points: dict[str, tuple[float, float]] = {}
+        reactant_fragment_ids: list[str] = []
+        product_fragment_ids: list[str] = []
         fragment_ids: list[str] = []
         arrow_ids: list[str] = []
+        start_sel = set(state_selection(panel, "starting_state") or range(1, len(entries) + 1))
         next_id += 1
         title_id = str(next_id)
         lines.append(f"    <t id='{title_id}' p='{36 + col * panel_w} {76 + row * panel_h}'><s font='3' size='11'>{escape(str(panel.get('title', f'Panel {panel_index}')))}</s></t>")
@@ -2541,11 +2549,15 @@ def render_cdxml_document(spec: dict[str, Any], warnings: list[str], *, scene_en
             next_id += 1
             fragment_id = str(next_id)
             fragment_ids.append(fragment_id)
+            mol_index = entry["mol_index"] + 1
+            if mol_index in start_sel:
+                reactant_fragment_ids.append(fragment_id)
+            else:
+                product_fragment_ids.append(fragment_id)
             lines.append(f"    <fragment id='{fragment_id}'>")
             mol = entry["mol"]
             positions = entry["positions"]
             atom_idx_to_id: dict[int, str] = {}
-            mol_index = entry["mol_index"] + 1
             visible_lone_pairs = _visible_lone_pair_entries(panel, display)
             lone_pair_counts = {
                 int(item["atom_map"]): int(item.get("_visible_count", item.get("count", 1)))
@@ -2561,13 +2573,19 @@ def render_cdxml_document(spec: dict[str, Any], warnings: list[str], *, scene_en
                     panel_atom_ids[(mol_index, int(atom_map))] = atom_id
                     panel_atom_ids_first.setdefault(int(atom_map), atom_id)
                 ax, ay = positions[atom.GetIdx()]
+                object_points[atom_id] = (ax, ay)
                 attrs = [
                     f"id='{atom_id}'",
                     f"p='{ax:.2f} {ay:.2f}'",
-                    f"Element='{_xml_attr(atom.GetSymbol())}'",
                 ]
+                if atom.GetAtomicNum() != 6:
+                    attrs.append(f"Element='{atom.GetAtomicNum()}'")
+                if atom.GetIsotope():
+                    attrs.append(f"Isotope='{atom.GetIsotope()}'")
                 if atom.GetFormalCharge():
                     attrs.append(f"Charge='{atom.GetFormalCharge()}'")
+                if atom.GetAtomicNum() != 6 or atom.GetFormalCharge():
+                    attrs.append(f"NumHydrogens='{atom.GetTotalNumHs()}'")
                 if atom_map:
                     attrs.append(f"AtomMap='{atom_map}'")
                     if int(atom_map) in lone_pair_counts:
@@ -2578,6 +2596,9 @@ def render_cdxml_document(spec: dict[str, Any], warnings: list[str], *, scene_en
                 bond_id = str(next_id)
                 begin_atom = bond.GetBeginAtom()
                 end_atom = bond.GetEndAtom()
+                bx0, by0 = positions[bond.GetBeginAtomIdx()]
+                bx1, by1 = positions[bond.GetEndAtomIdx()]
+                object_points[bond_id] = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0)
                 a = begin_atom.GetAtomMapNum()
                 b = end_atom.GetAtomMapNum()
                 if a and b:
@@ -2619,17 +2640,34 @@ def render_cdxml_document(spec: dict[str, Any], warnings: list[str], *, scene_en
             arrow_id = str(next_id)
             arrow_ids.append(arrow_id)
             arrow_type = "SingleElectron" if arrow.get("electron_count") == 1 or arrow.get("kind") == "single_electron" else "ElectronPair"
+            tx, ty = object_points.get(source_id, (0.0, 0.0))
+            hx, hy = object_points.get(target_id, (0.0, 0.0))
+            bb = f"{min(tx, hx):.2f} {min(ty, hy):.2f} {max(tx, hx):.2f} {max(ty, hy):.2f}"
+            head_style = "HalfLeft" if arrow_type == "SingleElectron" else "Full"
             lines.append(
-                f"    <arrow id='{arrow_id}' ArrowType='{arrow_type}' "
+                f"    <arrow id='{arrow_id}' BoundingBox='{bb}' FillType='None' "
+                f"ArrowheadHead='{head_style}' ArrowheadType='Angle' "
+                f"Head3D='{hx:.2f} {hy:.2f} 0' Tail3D='{tx:.2f} {ty:.2f} 0' "
+                f"ArrowType='{arrow_type}' "
                 f"ElectronCount='{arrow.get('electron_count', 1 if arrow_type == 'SingleElectron' else 2)}' "
                 f"SourceObject='{source_id}' TargetObject='{target_id}' "
                 f"Label='{_xml_attr(arrow.get('label', f'arrow {arrow_index}'))}'/>"
             )
         next_id += 1
-        lines.append(
-            f"    <reactionstep id='{next_id}' Reactants='{' '.join(fragment_ids)}' "
-            f"Arrows='{' '.join(arrow_ids)}' StepNumber='{panel_index}'/>"
-        )
+        step_attrs = [
+            f"id='{next_id}'",
+            f"ReactionStepReactants='{' '.join(reactant_fragment_ids or fragment_ids)}'",
+        ]
+        if product_fragment_ids:
+            step_attrs.append(f"ReactionStepProducts='{' '.join(product_fragment_ids)}'")
+        if arrow_ids:
+            step_attrs.append(f"ReactionStepArrows='{' '.join(arrow_ids)}'")
+        step_attrs.extend([
+            f"Reactants='{' '.join(fragment_ids)}'",
+            f"Arrows='{' '.join(arrow_ids)}'",
+            f"StepNumber='{panel_index}'",
+        ])
+        lines.append(f"    <reactionstep {' '.join(step_attrs)}/>")
     if warnings:
         next_id += 1
         warning_text = escape("\n".join(warnings))
@@ -3178,7 +3216,10 @@ def render_mechanism_canvas(spec: dict[str, Any], output_dir: str | None = None)
         if png_path.exists() and not png_warnings:
             ink_warnings, ink_summary = raster_ink_check(png_path)
             warnings.extend(ink_warnings)
+            result["publication_checks"]["warnings"].extend(ink_warnings)
             result["publication_checks"]["figure_audit"]["raster_check"] = ink_summary
+            if ink_warnings and result["status"] == "ok":
+                result["status"] = "ok_with_warnings"
         else:
             warnings.extend(png_warnings)
         cdxml_path.write_text(cdxml, encoding="utf-8")

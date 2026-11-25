@@ -162,9 +162,53 @@ def _add_abbreviation(mol, label: str) -> int | None:
     if normalized in {"C@", "C@@", "CH@", "CH@@", "C@H", "C@@H"}:
         atom = Chem.Atom("C")
         atom.SetChiralTag(
-            Chem.ChiralType.CHI_TETRAHEDRAL_CW if "@@" not in normalized else Chem.ChiralType.CHI_TETRAHEDRAL_CCW
+            Chem.ChiralType.CHI_TETRAHEDRAL_CW if "@@" in normalized else Chem.ChiralType.CHI_TETRAHEDRAL_CCW
         )
         return mol.AddAtom(atom)
+    if normalized in {"OH", "HO"}:
+        return _add_atom(mol, "O")
+    if normalized in {"SH", "HS"}:
+        return _add_atom(mol, "S")
+    if normalized in {"NH2", "H2N", "NH", "HN"}:
+        return _add_atom(mol, "N")
+    if normalized in {"CF3", "F3C"}:
+        carbon = _add_atom(mol, "C")
+        for _ in range(3):
+            f_idx = _add_atom(mol, "F")
+            mol.AddBond(carbon, f_idx, Chem.BondType.SINGLE)
+        return carbon
+    if normalized in {"OAc", "AcO"}:
+        oxygen = _add_atom(mol, "O")
+        carbonyl = _add_atom(mol, "C")
+        ox_d = _add_atom(mol, "O")
+        methyl = _add_atom(mol, "C")
+        mol.AddBond(oxygen, carbonyl, Chem.BondType.SINGLE)
+        mol.AddBond(carbonyl, ox_d, Chem.BondType.DOUBLE)
+        mol.AddBond(carbonyl, methyl, Chem.BondType.SINGLE)
+        return oxygen
+    if normalized in {"OBn", "BnO"}:
+        oxygen = _add_atom(mol, "O")
+        ch2 = _add_atom(mol, "C")
+        aryl = [_add_atom(mol, "C", aromatic=True) for _ in range(6)]
+        mol.AddBond(oxygen, ch2, Chem.BondType.SINGLE)
+        mol.AddBond(ch2, aryl[0], Chem.BondType.SINGLE)
+        for idx in range(6):
+            mol.AddBond(aryl[idx], aryl[(idx + 1) % 6], Chem.BondType.AROMATIC)
+        return oxygen
+    if normalized in {"OTf", "TfO"}:
+        oxygen = _add_atom(mol, "O")
+        sulfur = _add_atom(mol, "S")
+        ox_a = _add_atom(mol, "O")
+        ox_b = _add_atom(mol, "O")
+        cf3 = _add_atom(mol, "C")
+        mol.AddBond(oxygen, sulfur, Chem.BondType.SINGLE)
+        mol.AddBond(sulfur, ox_a, Chem.BondType.DOUBLE)
+        mol.AddBond(sulfur, ox_b, Chem.BondType.DOUBLE)
+        mol.AddBond(sulfur, cf3, Chem.BondType.SINGLE)
+        for _ in range(3):
+            f_idx = _add_atom(mol, "F")
+            mol.AddBond(cf3, f_idx, Chem.BondType.SINGLE)
+        return oxygen
     if normalized in {"Me", "CH3"}:
         return _add_atom(mol, "C")
     if normalized in {"tBu", "tertBu", "tertButyl", "tButyl"}:
@@ -198,9 +242,14 @@ def _add_abbreviation(mol, label: str) -> int | None:
         return _add_tosyl(mol, "O")
     if normalized in {"SO2Tol", "SO2Toluyl", "SO2Tos", "Ts", "Tos"}:
         return _add_toluenesulfonyl(mol)
-    if normalized in {"MEMO", "MEMOCH2"}:
+    if normalized in {"MEMO", "OMEM"}:
         return _add_methoxyethoxymethoxy_oxy(mol)
-    if normalized == "MOMO":
+    if normalized == "MEMOCH2":
+        ch2 = _add_atom(mol, "C")
+        oxy = _add_methoxyethoxymethoxy_oxy(mol)
+        mol.AddBond(ch2, oxy, Chem.BondType.SINGLE)
+        return ch2
+    if normalized in {"MOMO", "OMOM"}:
         return _add_methoxymethoxy_oxy(mol)
     if normalized in {"NMs", "NHMs", "MsN", "MsNH"}:
         return _add_methanesulfonyl(mol, "N")

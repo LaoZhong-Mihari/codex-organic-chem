@@ -6,6 +6,7 @@ from .input_review import prepare_input_review
 from .literature import literature_search
 from .rdkit_tools import descriptors_record, normalize_structure
 from .reaction import retrosynthesis_hints
+from .structure_review import review_mode
 
 
 def _tool_summary(smiles: str, record: dict[str, Any]) -> dict[str, Any]:
@@ -39,8 +40,8 @@ def suggest_synthesis_path(
 ) -> dict[str, Any]:
     target = normalize_structure(smiles=target_smiles, source="synthesis_target")
     target_dict = target.to_dict()
-    if not confirmed:
-        review = prepare_input_review(smiles=target_smiles)
+    if not confirmed and review_mode() != "off":
+        review = prepare_input_review(smiles=target_smiles, interactive=False)
         return {
             "status": "awaiting_user_confirmation",
             "workflow": "stepwise_synthesis_planning",
@@ -89,7 +90,7 @@ def suggest_synthesis_path(
         ),
         "evidence_policy": {
             "tool_facts": "RDKit descriptors, functional groups, structure warnings, and optional calculation outputs.",
-            "literature_facts": "Crossref metadata returned with DOI/URL when available; user must inspect full papers for exact procedures/yields.",
+            "literature_facts": "OpenAlex and Crossref metadata returned with DOI/URL when available; inspect full papers for exact procedures and yields.",
             "llm_assumptions": "Any reagent/condition idea not directly present in tool or literature metadata is hypothesis only.",
         },
         "warnings": [

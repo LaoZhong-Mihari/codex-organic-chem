@@ -282,21 +282,60 @@ def _arrow_ref(arrow: dict, prefix: str) -> tuple[str, tuple[int, ...]]:
     raise ValueError("compact layout requires chemical atom/bond anchors")
 
 
-def _find_molecule(
-    arrow: dict, prefix: str, molecules: list[Molecule], before: list[int]
-) -> Molecule:
-    _, maps = _arrow_ref(arrow, prefix)
+def _resolve_anchor(
+    arrow: dict,
+    prefix: str,
+    molecules: list[Molecule],
+    before: list[int],
+    source_mol: Molecule | None = None,
+) -> Anchor:
+    kind, maps = _arrow_ref(arrow, prefix)
     hint = arrow.get(prefix + "_molecule_index")
     matches = [
         m
         for m in molecules
         if set(maps) <= set(m.maps) and (m.index == hint if hint else m.index in before)
     ]
-    if len(matches) != 1:
-        raise ValueError(
-            f"{prefix} anchor is missing or ambiguous in the starting state"
-        )
-    return matches[0]
+    if len(matches) == 1:
+        return Anchor(matches[0], kind, maps)
+    # Cross-molecular incipient bond (e.g. from_bond: [1, 2], to_bond: [2, 3]):
+    # anchor the arrow head at the electrophilic partner atom in the other molecule.
+    if prefix == "to" and kind == "bond" and len(maps) == 2:
+        src_m = source_mol
+        if src_m is None:
+            try:
+                src_kind, src_maps = _arrow_ref(arrow, "from")
+                src_hint = arrow.get("from_molecule_index")
+                src_matches = [
+                    m
+                    for m in molecules
+                    if set(src_maps) <= set(m.maps)
+                    and (m.index == src_hint if src_hint else m.index in before)
+                ]
+                if len(src_matches) == 1:
+                    src_m = src_matches[0]
+            except ValueError:
+                src_m = None
+        if src_m is not None:
+            external = [mp for mp in maps if mp not in src_m.maps]
+            if len(external) == 1:
+                t_map = external[0]
+                t_matches = [
+                    m
+                    for m in molecules
+                    if t_map in m.maps and (m.index == hint if hint else m.index in before)
+                ]
+                if len(t_matches) == 1:
+                    return Anchor(t_matches[0], "atom", (t_map,))
+    raise ValueError(
+        f"{prefix} anchor is missing or ambiguous in the starting state"
+    )
+
+
+def _find_molecule(
+    arrow: dict, prefix: str, molecules: list[Molecule], before: list[int]
+) -> Molecule:
+    return _resolve_anchor(arrow, prefix, molecules, before).molecule
 
 
 def _make_molecules(
@@ -325,6 +364,7 @@ def _make_molecules(
         except ValueError:
             continue
         matches = []
+        dst_face_map = dst[0]
         for prefix, refs in (("from", src), ("to", dst)):
             hint = arrow.get(prefix + "_molecule_index")
             found = [
@@ -332,11 +372,20 @@ def _make_molecules(
                 for p in prepared
                 if set(refs) <= set(p[3]) and (p[0] == hint if hint else p[0] in before)
             ]
+            if not found and prefix == "to" and len(refs) == 2 and matches and matches[0] is not None:
+                ext = [mp for mp in refs if mp not in matches[0][3]]
+                if len(ext) == 1:
+                    dst_face_map = ext[0]
+                    found = [
+                        p
+                        for p in prepared
+                        if dst_face_map in p[3] and (p[0] == hint if hint else p[0] in before)
+                    ]
             matches.append(found[0] if len(found) == 1 else None)
         a, b = matches
         if a and b and a[0] != b[0]:
             facing.setdefault(a[0], (src[0], 0 if a[0] < b[0] else 180))
-            facing.setdefault(b[0], (dst[0], 180 if a[0] < b[0] else 0))
+            facing.setdefault(b[0], (dst_face_map, 180 if a[0] < b[0] else 0))
     references = []
     molecules = []
     for index, spec, mol, maps in prepared:
@@ -687,10 +736,8 @@ def _route(
     beam: list[tuple[float, list[Curve]]] = [(0, [])]
     for index, arrow in enumerate(panel.get("arrows", []), 1):
         try:
-            source_mol = _find_molecule(arrow, "from", molecules, before)
-            target_mol = _find_molecule(arrow, "to", molecules, before)
-            source = Anchor(source_mol, *_arrow_ref(arrow, "from"))
-            target = Anchor(target_mol, *_arrow_ref(arrow, "to"))
+            source = _resolve_anchor(arrow, "from", molecules, before)
+            target = _resolve_anchor(arrow, "to", molecules, before, source_mol=source.molecule)
             options = _candidates(arrow, index, source, target, bond, obstacles)
         except (ValueError, KeyError) as error:
             issues.append(f"Arrow {index}: {error}.")
@@ -752,15 +799,16 @@ def _compact_reactive_pair(
                 pairs.append((i, arrow, a, b))
         except ValueError:
             continue
-    if len(pairs) != 1:
+    if not pairs:
+        return operators
+    distinct_pairs = {frozenset((pa.index, pb.index)) for _, _, pa, pb in pairs}
+    if len(distinct_pairs) != 1:
         return operators
     index, arrow, a, b = pairs[0]
     if any(m.spec.get("depiction", {}).get("offset_bonds") for m in (a, b)):
         return operators
-    source, target = (
-        Anchor(a, *_arrow_ref(arrow, "from")),
-        Anchor(b, *_arrow_ref(arrow, "to")),
-    )
+    source = _resolve_anchor(arrow, "from", molecules, before)
+    target = _resolve_anchor(arrow, "to", molecules, before, source_mol=source.molecule)
     original = _candidates(
         arrow, index, source, target, bond, _obstacles(molecules, operators)
     )[0]
@@ -887,9 +935,11 @@ def _panel_svg(panel: Panel, index: int, preset: dict, display: dict) -> str:
             parts.append(
                 f"<polygon class='reaction-head' points='{_points([(x1 - 6, cy - 2.7), (x1, cy), (x1 - 6, cy + 2.7)])}'/>"
             )
+    drawn_lps: set[tuple[int, int]] = set()
     for curve in panel.curves:
         start, c1, c2, end = _shaft_points(curve)
         if curve.lp:
+            drawn_lps.add((curve.source.molecule.index, curve.source.maps[0]))
             direction = unit(sub(start, curve.lp))
             perp = (-direction[1], direction[0])
             dots = [add(curve.lp, mul(perp, sign * 1.8)) for sign in (-1, 1)]
@@ -911,6 +961,48 @@ def _panel_svg(panel: Panel, index: int, preset: dict, display: dict) -> str:
         parts.append(
             f"<polyline class='electron-head {head_class}' points='{_points(curve.head)}'/>"
         )
+    if display.get("lone_pair_display") != "source_only":
+        mol_by_idx = {m.index: m for m in panel.molecules}
+        for lp_entry in panel.spec.get("lone_pairs", []):
+            atom_map = int(lp_entry.get("atom_map", 0) or 0)
+            m_idx = lp_entry.get("molecule_index")
+            target_mol = (
+                mol_by_idx.get(int(m_idx))
+                if m_idx is not None
+                else next((m for m in panel.molecules if atom_map in m.maps), None)
+            )
+            if target_mol is None or atom_map not in target_mol.maps:
+                continue
+            vis = int(lp_entry.get("visible_count", lp_entry.get("count", 0)) or 0)
+            used = 1 if (target_mol.index, atom_map) in drawn_lps else 0
+            extra = max(0, vis - used)
+            for slot in range(used, used + extra):
+                ang = math.radians(-90 + 90 * slot)
+                ray = add(target_mol.point(atom_map), (math.cos(ang) * 20, math.sin(ang) * 20))
+                lp_pt = _boundary(Anchor(target_mol, "lone_pair", (atom_map,)), ray, 3.0)
+                perp = (-math.sin(ang), math.cos(ang))
+                dots = [add(lp_pt, mul(perp, sign * 1.8)) for sign in (-1, 1)]
+                parts.append(f"<g class='lone-pair-object' id='p{index}:m{target_mol.index}:lp:{atom_map}:{slot}'>")
+                parts.extend(f"<circle cx='{x:.2f}' cy='{y:.2f}' r='0.9'/>" for x, y in dots)
+                parts.append("</g>")
+    if display.get("show_partial_charges"):
+        mol_by_idx = {m.index: m for m in panel.molecules}
+        for pc in panel.spec.get("partial_charges", []):
+            atom_map = int(pc.get("atom_map", 0) or 0)
+            m_idx = pc.get("molecule_index")
+            target_mol = (
+                mol_by_idx.get(int(m_idx))
+                if m_idx is not None
+                else next((m for m in panel.molecules if atom_map in m.maps), None)
+            )
+            if target_mol is None or atom_map not in target_mol.maps:
+                continue
+            label = str(pc.get("label") or pc.get("value") or "")
+            if label:
+                px, py = target_mol.point(atom_map)
+                parts.append(
+                    f"<text class='atom-map partial-charge' x='{px - 10:.2f}' y='{py - 9:.2f}'>{escape(label)}</text>"
+                )
     parts.append("</g>")
     return "\n".join(parts)
 

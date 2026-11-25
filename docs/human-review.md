@@ -10,12 +10,12 @@ that knowledge into the loop. It opens in the default browser, needs no build
 step, and returns the user's corrections as data.
 
 ```bash
-codex-chem review-demo --lang zh          # two practice sessions with planted mistakes
-codex-chem review-batch --input items.json   # structures, each beside the crop it was read from
-codex-chem input-review --image-path crop.png --note "C4-OH read as hashed"
-codex-chem route-review --route route.json   # a route with the audit laid out per step
-codex-chem review-result --session-id <id> --wait
-codex-chem review-mode ask                # auto (default) | ask | off
+uv run codex-chem review-demo --lang zh          # two practice sessions with planted mistakes
+uv run codex-chem review-batch --input items.json   # structures, each beside the crop it was read from
+uv run codex-chem input-review --image-path crop.png --note "C4-OH read as hashed"
+uv run codex-chem route-review --route route.json   # a route with the audit laid out per step
+uv run codex-chem review-result --session-id <id> --wait
+uv run codex-chem review-mode ask                # auto (default) | ask | off
 ```
 
 The page is bilingual: the button in the top bar switches between English and

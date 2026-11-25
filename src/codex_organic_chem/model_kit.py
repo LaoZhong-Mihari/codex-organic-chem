@@ -30,11 +30,12 @@ from .structure_compare import StructureError, canonical, formula_counter, hill_
 if RDKIT_AVAILABLE:  # pragma: no cover - exercised through tests
     import numpy as np
     from rdkit import Chem
-    from rdkit.Chem import AllChem, rdMolTransforms
+    from rdkit.Chem import AllChem, rdCIPLabeler, rdMolTransforms
 else:  # pragma: no cover
     np = None
     Chem = None
     AllChem = None
+    rdCIPLabeler = None
     rdMolTransforms = None
 
 
@@ -304,6 +305,102 @@ def _heavy_parent(mol: Any, idx: int) -> int:
     return idx
 
 
+def _pairwise_trigonal_cip_gt(base_mol: Any, centre: int, nb_a: int, nb_b: int, nb_drop: int) -> int:
+    """Compare two trigonal substituents ``nb_a`` vs ``nb_b`` around ``centre`` using IUPAC 2013 CIP rules.
+
+    Returns ``+1`` if ``nb_a > nb_b``, ``-1`` if ``nb_b > nb_a``, or ``0`` if CIP-indistinguishable.
+    """
+    from .structure_compare import _permutation_parity
+
+    rw = Chem.RWMol(base_mol)
+    rw.RemoveAllConformers()
+    if rw.GetAtomWithIdx(centre).GetIsAromatic():
+        try:
+            Chem.Kekulize(rw, clearAromaticFlags=True)
+        except Exception:
+            pass
+    centre_z = rw.GetAtomWithIdx(centre).GetAtomicNum() or 6
+    # Open any multiple bond at centre into a single bond + zero-H CIP duplicate atom on the partner.
+    for nb in (nb_a, nb_b):
+        bond = rw.GetBondBetweenAtoms(centre, nb)
+        if bond is None:
+            return 0
+        mult = int(round(bond.GetBondTypeAsDouble()))
+        if mult > 1:
+            bond.SetBondType(Chem.BondType.SINGLE)
+            for _ in range(mult - 1):
+                dup = Chem.Atom(centre_z)
+                dup.SetNoImplicit(True)
+                dup.SetNumExplicitHs(0)
+                dup_idx = rw.AddAtom(dup)
+                rw.AddBond(nb, dup_idx, Chem.BondType.SINGLE)
+    # Detach the third substituent and attach high-Z (Og=118) and zero-Z (*) reference ligands.
+    if rw.GetBondBetweenAtoms(centre, nb_drop) is not None:
+        rw.RemoveBond(centre, nb_drop)
+    drop_atom = rw.GetAtomWithIdx(nb_drop)
+    drop_atom.SetNoImplicit(True)
+    c_atom = rw.GetAtomWithIdx(centre)
+    c_atom.SetAtomicNum(6)
+    c_atom.SetFormalCharge(0)
+    c_atom.SetNoImplicit(True)
+    c_atom.SetNumExplicitHs(0)
+    hi = Chem.Atom(118)
+    hi.SetNoImplicit(True)
+    hi.SetNumExplicitHs(0)
+    lo = Chem.Atom(0)
+    lo.SetNoImplicit(True)
+    lo.SetNumExplicitHs(0)
+    hi_idx = rw.AddAtom(hi)
+    lo_idx = rw.AddAtom(lo)
+    rw.AddBond(centre, hi_idx, Chem.BondType.SINGLE)
+    rw.AddBond(centre, lo_idx, Chem.BondType.SINGLE)
+
+    # Set CW tag on centre; in RDKit, looking from first neighbor toward remaining three, CW means clockwise.
+    rw.GetAtomWithIdx(centre).SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
+    probe = rw.GetMol()
+    try:
+        Chem.SanitizeMol(probe)
+        rdCIPLabeler.AssignCIPLabels(probe)
+    except Exception:
+        return 0
+    p_centre = probe.GetAtomWithIdx(centre)
+    if not p_centre.HasProp("_CIPCode"):
+        return 0
+    cip = p_centre.GetProp("_CIPCode")
+    bond_neighbors = [b.GetOtherAtomIdx(centre) for b in p_centre.GetBonds()]
+    # Reference order [hi_idx, nb_a, nb_b, lo_idx]: looking down centre->lo_idx,
+    # if nb_a > nb_b then priorities 1(hi) -> 2(nb_a) -> 3(nb_b) match CW ("R") when parity == 0.
+    # Let's check against RDKit's bond-order convention: in [hi_idx, nb_a, nb_b, lo_idx],
+    # CHI_TETRAHEDRAL_CW means looking from bond_neighbors[0], [1]->[2]->[3] is clockwise.
+    # For target [lo_idx, hi_idx, nb_a, nb_b] (looking from lo_idx, hi->nb_a->nb_b is CW -> viewing from front, hi->nb_a->nb_b is CCW = S!):
+    parity = _permutation_parity(bond_neighbors, [lo_idx, hi_idx, nb_a, nb_b])
+    # When parity == 0, CW tag on bond_neighbors means looking from lo_idx, hi->nb_a->nb_b is CW,
+    # which viewed from the front (away from lo_idx) is CCW = S if nb_a > nb_b, or R if nb_b > nb_a!
+    is_s = cip in {"S", "s"}
+    if parity == 1:
+        is_s = not is_s
+    return 1 if is_s else -1
+
+
+def _trigonal_cip_order(mol: Any, centre: int, neighbors: list[int]) -> tuple[list[int], bool]:
+    """Return ``(ordered_neighbors_descending_cip, all_three_distinct)`` using IUPAC 2013 CIP rules."""
+    n0, n1, n2 = neighbors
+    c01 = _pairwise_trigonal_cip_gt(mol, centre, n0, n1, n2)
+    c12 = _pairwise_trigonal_cip_gt(mol, centre, n1, n2, n0)
+    c02 = _pairwise_trigonal_cip_gt(mol, centre, n0, n2, n1)
+    if 0 in (c01, c12, c02):
+        return sorted(neighbors), False
+    wins = {
+        n0: (1 if c01 > 0 else 0) + (1 if c02 > 0 else 0),
+        n1: (1 if c01 < 0 else 0) + (1 if c12 > 0 else 0),
+        n2: (1 if c02 < 0 else 0) + (1 if c12 < 0 else 0),
+    }
+    if set(wins.values()) != {0, 1, 2}:
+        return sorted(neighbors), False
+    ordered = sorted(neighbors, key=lambda idx: wins[idx], reverse=True)
+    return ordered, True
+
+
 def face_accessibility(
     smiles: str,
     atom: int,
@@ -330,22 +427,16 @@ def face_accessibility(
             f"Atom {centre} ({centre_atom.GetSymbol()}) has {len(neighbors)} neighbours; "
             "face analysis needs a trigonal atom with exactly three (e.g. a carbonyl or alkene carbon)."
         )
-    Chem.AssignStereochemistry(mol, cleanIt=False, force=True)
-    ranks = {
-        idx: int(mol.GetAtomWithIdx(idx).GetProp("_CIPRank")) if mol.GetAtomWithIdx(idx).HasProp("_CIPRank") else 0
-        for idx in neighbors
-    }
-    distinct = len(set(ranks.values())) == 3
-    ordered = (
-        sorted(neighbors, key=lambda i: ranks[i], reverse=True) if distinct else sorted(neighbors)
-    )
+    ordered, distinct = _trigonal_cip_order(mol, centre, neighbors)
     # From the +normal side the sequence ordered[0] -> [1] -> [2] runs
     # counter-clockwise; with CIP-descending order that face is Si.
     plus_name, minus_name = ("Si", "Re") if distinct else ("A", "B")
     radii = _vdw_radii(mol)
+    max_r = float(radii.max()) if radii.size else 2.0
     grid = _grid(radius, 0.25)
+    grid_dirs = grid / np.linalg.norm(grid, axis=1)[:, None]
     cos_limit = math.cos(math.radians(cone_half_angle))
-    others = [i for i in range(mol.GetNumAtoms()) if i != centre]
+    all_others = np.array([i for i in range(mol.GetNumAtoms()) if i != centre], dtype=int)
     per_conf = []
     shield_atoms: dict[str, dict[int, float]] = {plus_name: {}, minus_name: {}}
     for pos, conf_id in enumerate(ens.conf_ids):
@@ -357,26 +448,37 @@ def face_accessibility(
         if length < 1e-6:
             continue
         normal /= length
-        directions = grid / np.linalg.norm(grid, axis=1)[:, None]
-        cosines = directions @ normal
-        points = origin + grid
-        delta = points[:, None, :] - xyz[others][None, :, :]
-        dist = np.linalg.norm(delta, axis=2)
-        inside = dist < radii[others][None, :]
-        buried = inside.any(axis=1)
+        cosines = grid_dirs @ normal
+        plus_mask = cosines >= cos_limit
+        minus_mask = cosines <= -cos_limit
+        cone_mask = plus_mask | minus_mask
+        cone_points = origin + grid[cone_mask]
+        # Cull atoms too far to intersect the sampling sphere around origin
+        other_xyz = xyz[all_others]
+        near_filter = np.linalg.norm(other_xyz - origin[None, :], axis=1) <= (radius + max_r)
+        others = all_others[near_filter]
+        if others.size and cone_points.shape[0]:
+            delta = cone_points[:, None, :] - xyz[others][None, :, :]
+            dist = np.linalg.norm(delta, axis=2)
+            inside = dist < radii[others][None, :]
+            buried = inside.any(axis=1)
+        else:
+            dist = np.empty((cone_points.shape[0], 0), dtype=float)
+            inside = np.zeros((cone_points.shape[0], 0), dtype=bool)
+            buried = np.zeros((cone_points.shape[0],), dtype=bool)
+        sub_plus = plus_mask[cone_mask]
+        sub_minus = minus_mask[cone_mask]
         values = {}
-        for name, mask in ((plus_name, cosines >= cos_limit), (minus_name, cosines <= -cos_limit)):
+        for name, mask in ((plus_name, sub_plus), (minus_name, sub_minus)):
             total = int(mask.sum())
             values[name] = float(buried[mask].sum()) / total if total else 0.0
-            # attribute buried points to the nearest occupying atom, skipping
-            # the centre's own substituents (they sit in the plane)
             sub = inside[mask]
             if sub.size:
                 masked_dist = np.where(sub, dist[mask], np.inf)
                 nearest = masked_dist.argmin(axis=1)
                 hit = sub.any(axis=1)
                 for column in nearest[hit]:
-                    atom_idx = others[int(column)]
+                    atom_idx = int(others[int(column)])
                     parent = _heavy_parent(mol, atom_idx)
                     if parent in neighbors or parent == centre:
                         continue

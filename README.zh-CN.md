@@ -2,7 +2,7 @@
 
 [English](README.md) · **简体中文**
 
-用分子结构核查有机化学答案。你可以比较两个立体异构体、枚举取代产物，也可以沿一条合成路线追踪某个立体中心的构型变化。结构核对无误后，还可以把路线或机理画成期刊风格的图。这些工具都基于本地 RDKit，可以直接使用命令行或 Python，也可以通过 MCP（模型上下文协议）在 Codex 或 Claude Code 中调用。
+用分子结构核查有机化学答案。你可以比较两个立体异构体、枚举取代产物、核对一串反应机理中间体，也可以沿一条合成路线追踪某个立体中心的构型变化。结构核对无误后，还可以把路线或机理画成期刊风格的图。这些工具都基于本地 RDKit，可以直接使用命令行或 Python，也可以通过 MCP（模型上下文协议）在 Codex 或 Claude Code 中调用。
 
 [快速开始](#快速开始) · [工具选择](#工具选择) · [路线示例](#路线示例) · [画路线图和机理图](#画路线图和机理图) · [基准测试](#基准测试) · [详细文档](#详细文档)
 
@@ -10,7 +10,7 @@
 
 ## 快速开始
 
-用 Codex 或 Claude Code 打开本仓库，告诉它「**按照 INSTALL.md 安装项目并运行自检**」即可。手动安装需要先准备好 [uv](https://docs.astral.sh/uv/)，然后在仓库根目录运行以下命令。项目使用 Python 3.12，依赖版本由 `uv.lock` 锁定。
+用 Codex 或 Claude Code 打开本仓库，告诉它「**按照 INSTALL.md 安装项目并运行自检**」即可。手动安装需要先准备好 [uv](https://docs.astral.sh/uv/)，然后在仓库根目录运行以下命令。项目需要 Python 3.12 及以上版本，依赖版本由 `uv.lock` 锁定。
 
 ```bash
 uv sync --locked --extra mcp
@@ -25,7 +25,7 @@ uv run codex-chem compare --a 'C[C@H](O)CC' --b 'C[C@@H](O)CC'
 
 输出的 JSON 中会出现 `"relation": "enantiomers"`，即两者互为对映体。它们的分子式都是 C₄H₁₀O，唯一的立体中心构型相反。
 
-**接入 AI 助手。** Claude Code 会发现项目自带的 skill，并从 `.mcp.json` 读取服务器配置，按提示批准连接即可。Codex 的 skill 位于 `.agents/skills/`，还需在 `~/.codex/config.toml` 中添加 MCP 服务器配置，并填入本仓库的绝对路径。[连接步骤与配置示例](INSTALL.md#4-connect-the-mcp-server-and-the-skill)
+**接入 AI 助手。** Claude Code 会发现项目自带的 skill，并从 `.mcp.json` 读取服务器配置，按提示批准连接即可。Codex 的 skill 位于 `.agents/skills/`，还需在 `~/.codex/config.toml` 中添加 MCP 服务器配置，并填入本仓库的绝对路径。服务器默认注册 28 个工具并暴露 `chem://skill/...` 资源；非绘图工具默认省去体积较大的 SVG 和 Molblock 字段（需要时可传 `include_drawings=true`），小上下文客户端也可通过 `CODEX_CHEM_MCP_COMPACT=1` 启用 14 工具精简模式。[连接步骤与配置示例](INSTALL.md#4-connect-the-mcp-server-and-the-skill)
 
 ## 工具选择
 
@@ -33,21 +33,21 @@ uv run codex-chem compare --a 'C[C@H](O)CC' --b 'C[C@@H](O)CC'
 
 | 想回答的问题 | 命令 | 结果里看什么 |
 |---|---|---|
-| 两个结构是什么关系？ | `compare` | 是否为同一化合物、对映体、非对映体或构造异构体，以及哪些立体中心不同。 |
-| 有多少种可能？ | `enumerate` | 立体异构体数、取代产物数，或按分子对称性区分的碳、氢环境数，可用于分析 NMR 谱。 |
-| 路线里画出的结构和反应条件是否相符？ | `route-check` | 各步的分子式变化、立体中心构型、给定条件下可能受影响的官能团，以及最终产物与目标的关系。 |
-| 哪一面的位阻更大？两个原子能靠多近？ | `model-kit` | 在一组基态构象中，哪些原子遮挡了反应面，原子间距和二面角如何变化。 |
-| 这张图里画的是什么结构？ | `parse-image`、`parse-scheme` | 从已配置的化学结构图像识别（OCSR）引擎获取候选结构，再到审核页面对照原图校正。 |
-| 怎样画路线图或机理图？ | `route-figure`、`mechanism-validate`、`mechanism-render` | 多步路线图全图键长统一，导出 SVG 和 PNG。机理图的电子转移箭头通过原子映射定位，验证器会检查氢和电荷守恒，并核对支持的电子转移能否得到所画的下一状态。[画路线图和机理图](#画路线图和机理图) |
+| 两个结构是什么关系？ | `compare` | 是否为同一化合物、对映体、非对映体、互变异构体、同位素异构体或构造异构体，以及哪些四面体、E/Z 或丙二烯轴手性（`Ra`/`Sa`）中心不同。 |
+| 有多少种可能？ | `enumerate` | 立体异构体数、取代产物数，或基于三维分子对称性区分的 ¹³C、¹H 环境数（含前手性非对映异位基团），可用于分析 NMR 谱。 |
+| 路线或机理中间体序列与反应条件是否自洽？ | `route-check`、`mechanism-steps-check` | 路线各步分子式与电荷变化、立体中心构型与立体专一性烯烃加成、旁观官能团相容性；或针对机理中间体列表，核查价态、自由基奇偶性、质子转移骨架不变性与串联反应闭合。 |
+| 哪一面的位阻更大？两个原子能靠多近？ | `model-kit` | 基于 IUPAC 2013 规则的 Re/Si 反应面遮挡与阻挡原子、反应原子间距、二面角构象分布、环上顺反关系、三维可嵌入性及异构体相对能量。 |
+| 这张图里画的是什么结构？ | `crop-image`、`parse-image`、`parse-scheme` | 归一化 `0.1` 步长坐标网格标尺与 2× 放大局部裁剪，保留立体构型的常见缩写展开，配合多引擎 OCSR 候选识别及审核台并排校正。 |
+| 怎样画路线图或机理图？ | `route-figure`、`mechanism-validate`、`mechanism-render` | 多步路线图全图键长统一，导出 SVG 和 PNG；弯箭头机理图导出 SVG、CDXML 和 ChemDoodle JSON。验证器检查氢和电荷守恒，并逐步重放定域键、分子间 π 键及芳环参与的电子转移。[画路线图和机理图](#画路线图和机理图) |
 
-安装可选引擎后，还可以用 GFN2-xTB 计算能量、用 CREST 搜索构象、用 Open Babel 转换文件格式，或从图片识别结构。`uv run codex-chem doctor` 会列出本机可用的引擎。查文献可用 `literature-search`，它优先查询 OpenAlex，必要时回退到 Crossref。[可选工具配置](docs/external-tools.md)
+安装可选引擎后，还可以用 GFN2-xTB 计算能量和 Fukui 指数（含硼、硅体系在 MMFF94 缺参数时自动回退到 UFF）、用 CREST 搜索构象、用 Open Babel 转换文件格式，或从图片识别结构。`uv run codex-chem doctor` 会列出本机可用的引擎。查文献可用 `literature-search`，它优先查询 OpenAlex，必要时回退到 Crossref，并支持 `CODEX_CHEM_MAILTO`、`OPENALEX_API_KEY`、结果缓存与限流退避重试。[可选工具配置](docs/external-tools.md)
 
 ## 路线示例
 
 **`route-check` 核查一条已经画好的合成路线。** 输入是目标结构、用 SMILES 表示的编号化合物，以及每一步的反应物、产物和条件。以仓库自带的八步羟脯氨酸路线为例，它会问三个问题。[示例输入](tests/fixtures/routes/hydroxyproline_double_inversion.json) · [对应的路线图](#画路线图和机理图)
 
 1. **原子数的变化能用这一步的试剂解释吗？** 工具计算产物相对反应物多了或少了哪些原子，再把变化与条件中提到的试剂对照。如果还列出了试剂和副产物的结构，它会把这些物种也计入元素与电荷平衡。
-2. **同一个立体中心经历了什么？** 工具在反应物和产物之间建立原子映射，按取代基的空间排列判断构型保持或翻转。取代基优先级改变也可能让 R/S 标签改变，因此单看字母容易误判。
+2. **同一个立体中心经历了什么？** 工具在反应物和产物之间建立原子映射，按取代基的空间排列判断构型保持或翻转，并核对 `E`/`Z` 烯烃立体专一性加成（协同环氧化/环丙烷化/氮杂环丙烷化、顺式双羟基化与反式双卤代）。取代基优先级改变也可能让 R/S 标签改变，因此单看字母容易误判。
 3. **哪些画法需要解释？** 工具检查给定试剂可能影响哪些画成不变的官能团，最后还会逐个立体中心比较最终产物和目标。在这条路线的第 3 步，两个酯基里只有一个发生转化，工具会请你说明选择性的依据。
 
 在 Codex 或 Claude Code 中，可以把文件路径和问题一起交给助手。
@@ -78,6 +78,14 @@ uv run codex-chem review-demo --lang zh
 
 审核页面支持翻转立体中心、指定 R/S 和 E/Z、编辑 SMILES 和粘贴 Molfile。修改保存在本机 `~/.codex-chem/reviews/`，助手可以读取校正后的结构继续工作。[审核操作与截图](docs/human-review.md)
 
+**核查机理中间体序列。** 当题目要求给出一串反应中间体 SMILES，而非多步合成路线或二维弯箭头图时，`mechanism-steps-check` 会逐步检查每个中间体的原子价态与自由基奇偶性、质子转移的重原子骨架不变性、相邻物种分子式与电荷差能否由反应物或试剂解释，并确认最后一步闭合到目标产物（若停在目标产物的构造异构体上，会提示串联反应尚未走完）。
+
+```bash
+uv run codex-chem mechanism-steps-check \
+  --reaction "C=O.[C-]#N>C#N>OCC#N" \
+  --steps '["[O-]CC#N", "OCC#N"]'
+```
+
 ## 画路线图和机理图
 
 **核查过的路线可以直接画成路线图。** `route-figure` 按 JSON 参数文件里列出的结构和反应条件，排出一张多步路线图。下图就是上面例子里的羟脯氨酸路线，用 ACS 预设按[这份参数文件](docs/examples/hydroxyproline-route-figure.json)画成。[SVG 原图](docs/images/example-route-figure.svg)
@@ -87,7 +95,7 @@ uv run codex-chem review-demo --lang zh
 - **整张图是一个整体。** 不论分子大小，所有结构的键长、线宽和字号都相同。预设 `acs`、`rsc` 按 ACS、RSC 期刊的风格设定这些比例，`presentation` 字更大，适合幻灯片。
 - **骨架保持原位。** 用 SMILES 给出的结构，会把它和前面结构共有的部分固定在相同坐标上再排布。上图中，Boc 保护的吡咯烷环在九个结构里朝向始终一致。Molfile 会保留你在编辑器里画好的布局，只做小角度拉正。
 - **先解析结构，再作图。** 每个 SMILES 或 Molfile 都由 RDKit 读取，结果里列出每个化合物的规范 SMILES 和 InChIKey，可以据此确认图上画的就是核查过的结构。楔形键和虚楔键来自输入里的立体信息。
-- **版面跟着结构走。** 每个格子按结构和说明文字的实际大小留位，箭头按上下文字的长度加宽，`CH2Cl2` 这类分子式里的数字自动变成下标。结构下方是一行加粗的标签，通常是化合物编号，还可以再加一行灰色的名称，太长时自动换行。设置 `max_width` 后，太长的一行会在箭头处断开，分成宽度相近的几行。
+- **版面跟着结构走。** 每个格子按结构和说明文字的实际大小留位，箭头按上下文字的长度加宽，`CH2Cl2` 这类分子式里的数字自动变成下标，而 `XPhos-Pd-G3` 这类预催化剂代号保持原样。结构下方是一行加粗的标签（通常是化合物编号）和可选的灰色名称（支持中英文混排自动换行），每一行还可加 `note` 标注汇聚支路。设置 `max_width` 后，太长的一行会在箭头处断开，分成宽度相近的几行。
 - **检查通过才报 `ok`。** 每次作图都会检查元素是否重叠、键长是否一致、文字是否会被裁掉。有问题时，状态会变成 `ok_with_warnings` 或 `blocked_for_publication`。
 - **以 SVG 为准。** SVG 是可以继续编辑的原图。本机装有 Chrome、Inkscape、ImageMagick 或 rsvg-convert 时，还会另存一张 PNG 预览。
 
@@ -127,7 +135,7 @@ uv run codex-chem route-figure --spec docs/examples/hydroxyproline-route-figure.
 
 给 `route-check` 加上 `--figure-dir DIR`，它会在核查的同时把整条路线画出来，不用另写参数文件。图中化合物编号加粗、名称写在下方，试剂写在箭头上方、溶剂和温度写在下方，各步分成宽度相近的几行。想自己决定分行和说明文字时，再写参数文件。
 
-**机理图。** `mechanism-render` 根据带原子映射的参数文件画弯箭头机理，每个箭头都从孤对电子或化学键出发，指向原子或化学键。作图之前，`mechanism-validate` 会逐步重放电子转移，并检查氢和电荷是否守恒。除了 SVG，还会输出可在 ChemDraw 中打开的 CDXML、ChemDoodle JSON 和逐步记录。[机理图与路线图详细说明](docs/figures.md)
+**机理图。** `mechanism-render` 根据带原子映射的参数文件画弯箭头机理，每个箭头都从孤对电子或化学键出发，指向原子或化学键，支持分子间 π 键进攻以及凯库勒式活性芳环或旁观芳环。作图之前，`mechanism-validate` 会逐步重放电子转移，并检查氢、电荷与旁观抗衡离子是否守恒。除了 SVG（可选开启教学模式的孤对电子与部分电荷标注），还会输出符合规范的 ChemDraw CDXML、ChemDoodle JSON 和逐步记录。[机理图与路线图详细说明](docs/figures.md)
 
 <img src="docs/images/example-mechanism.png" width="680" alt="mechanism-render 画出的氰醇生成机理：氰根加成到甲醛上，HCN 再把烷氧负离子质子化">
 
@@ -154,11 +162,11 @@ uv run codex-chem route-figure --spec docs/examples/hydroxyproline-route-figure.
 
 | 改动 | 原有工具的规范化警告或配平状态发生变化 | `route-check` 出现新的 `blocking` 或 `review` 提示 |
 |---|---:|---:|
-| 全部变体 | 67/282 | **280/282** |
-| 翻转一个立体中心 | 0/36 | 35/36 |
+| 全部变体 | 67/282 | **282/282** |
+| 翻转一个立体中心 | 0/36 | 36/36 |
 | 将取代基移至相邻碳原子 | 16/27 | 27/27 |
 
-在 280 个出现新提示的变体中，有 **83 个**新增了 `blocking` 问题。三条原始路线均无 `blocking`，每条仍有 0 至 3 条 `review`。脚本只要看到新提示就计数。要知道提示是否指向真正的错误、模型读后能否修对，还需要给诊断和修改后的路线分别评分。
+在 282 个出现新提示的变体中，有 **83 个**新增了 `blocking` 问题（包括 `E`/`Z` 烯烃协同环氧化立体构型不符，以及底物或条件无法解释的烷氧基/醇脱除）。三条原始路线均无 `blocking`，每条仍有 0 至 3 条 `review`。脚本只要看到新提示就计数。要知道提示是否指向真正的错误、模型读后能否修对，还需要给诊断和修改后的路线分别评分。
 
 ```bash
 uv run python scripts/benchmark_route_check.py --output-dir outputs/route_check_benchmark
@@ -211,7 +219,7 @@ uv run python scripts/benchmark_route_check.py --output-dir outputs/route_check_
   <img src="docs/images/omebench.zh.light.png" width="860" alt="oMeBench 上 A、D、E 三组的得分，图 a 为 Claude Opus 5.5，图 b 为 GPT-6.2 Astra，带 95% 自助法区间，每个反应一个圆点，柱下列出用到 skill 的比例和每次费用">
 </picture>
 
-两个模型用了工具都没有可测出的提分。D 组减 A 组，Opus 是 +0.01（95% 自助法区间 −0.07 至 +0.11），Astra 是 −0.01（−0.06 至 +0.05）。两个模型加载 skill 的频率差别很大。面对这种格式固定的提示，Opus 通常直接作答。在加载了 skill 的 4 次运行里，它比较了结构、分析了反应或运行了 Python，但一次也没有调用 `mechanism-validate`。可能的原因是 skill 把机理验证放在弯箭头机理图下面介绍，而 oMeBench 要的是中间体列表。Astra 在提供工具的每次运行中都读取了 skill，仍然没有提分。单次运行的波动也不小：Opus 在同样 17 道题上跑了两次 A 组，平均分分别是 0.511 和 0.498，但单题得分平均变化 0.107。要测出小于约 0.1 的效果，需要重复运行。
+两个模型用了工具都没有可测出的提分。D 组减 A 组，Opus 是 +0.01（95% 自助法区间 −0.07 至 +0.11），Astra 是 −0.01（−0.06 至 +0.05）。两个模型加载 skill 的频率差别很大。面对这种格式固定的提示，Opus 通常直接作答。在加载了 skill 的 4 次运行里，它比较了结构、分析了反应或运行了 Python，但一次也没有调用 `mechanism-validate`。可能的原因是 skill 把机理验证放在弯箭头机理图下面介绍，而 oMeBench 要的是中间体列表。Astra 在提供工具的每次运行中都读取了 skill，仍然没有提分。单次运行的波动也不小：Opus 在同样 17 道题上跑了两次 A 组，平均分分别是 0.511 和 0.498，但单题得分平均变化 0.107。要测出小于约 0.1 的效果，需要重复运行。（针对中间体 SMILES 序列的 `mechanism-steps-check` 及相应 skill 指引是在上述 11 月 21—22 日实验之后补充的，无需弯箭头坐标即可逐步核查中间体列表；它在 oMeBench 上的实际效果仍有待多轮重复评测。）
 
 下图把两个基准放在同一个尺度上：同一批题从 A 组到 D 组、从 A 组到 E 组的变化。在 oMeBench 上，四个区间都跨过零。在竞赛题上，两个区间都从零开始：9 道题里，D 组有 7 道、E 组有 6 道与 A 组同分，平均分的提高只来自两三道题，主要是 CCHO40-P4。
 
@@ -235,7 +243,7 @@ uv run python scripts/benchmark_route_check.py --output-dir outputs/route_check_
 以下文档为英文。
 
 - [安装与故障排查](INSTALL.md)涵盖运行环境、客户端配置和安装自检。
-- [核查工具指南](docs/verification-kit.md)介绍结构比较、异构体枚举、路线核查、构象分析和逐步逆合成建议。[Python API 参考](.agents/skills/organic-chemistry-assistant/references/kit-api.md)列出参数和返回值。
+- [核查工具指南](docs/verification-kit.md)介绍结构比较、异构体枚举、路线核查、机理中间体序列核查、构象分析和逐步逆合成建议。[Python API 参考](.agents/skills/organic-chemistry-assistant/references/kit-api.md)列出参数和返回值。
 - [Skill 与 MCP 工具清单](docs/skills-and-mcp.md)介绍可用工具、可选 Python 工具以及 Claude Code 的路线复核子代理。
 - [机理图与路线图](docs/figures.md)包含作图示例、SVG 和 CDXML 导出说明，以及化学绘图编辑器的集成方式。
 - [依赖说明](DEPENDENCIES.md)和[更新记录](CHANGELOG.md)列出软件要求和各版本的变化。

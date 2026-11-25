@@ -7,7 +7,7 @@ commands from the repository root.
 ## 1. uv
 
 The only prerequisite is [uv](https://docs.astral.sh/uv/). It provides Python
-3.12 (the project requires `>=3.12,<3.13`) and installs every Python package at
+3.12+ (the project requires `>=3.12`) and installs every Python package at
 the version pinned in `uv.lock`.
 
 ```bash
@@ -29,7 +29,7 @@ uv sync --locked --extra mcp
   then this command again.
 - `--extra mcp` adds the MCP server. Add `--extra dev` to run the tests.
 - Do not install into another interpreter with pip. If pip is unavoidable, use
-  Python 3.12 and `pip install -e ".[mcp]"`; the extra keeps `mcp` below 2.0.
+  Python 3.12+ and `pip install -e ".[mcp]"`; the extra keeps `mcp` below 2.0.
 
 ## 3. Check the install
 
@@ -95,7 +95,7 @@ uv run pytest
 |---|---|---|
 | MCP server fails with `No module named 'mcp'` | environment synced without the `mcp` extra | `uv sync --locked --extra mcp` |
 | MCP server fails with `No module named 'mcp.server.fastmcp'` | mcp 2.x installed, usually by pip without the lock file | `uv sync --locked --extra mcp`, or `pip install "mcp>=1.2,<2"` |
-| pip refuses the package because of `Requires-Python` | an interpreter other than 3.12 | use uv, or a Python 3.12 environment |
+| pip refuses the package because of `Requires-Python` | an interpreter older than 3.12 | use uv, or a Python 3.12+ environment |
 | The MCP server times out the first time it starts | its first `uv run` is still downloading packages | run step 2 first, then reconnect |
 | `codex-chem: command not found` | the project environment is not activated | prefix the command with `uv run`; from another directory use `uv run --directory /path/to/repository codex-chem ...` |
 | No browser opens for a review page | headless machine or no default browser | the command prints the URL; `CODEX_CHEM_REVIEW_OPEN_BROWSER=0` stops it from trying |

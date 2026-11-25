@@ -57,12 +57,17 @@ def _attach_review_session(
     """
     gate = review_gate(confirmed, what="this structure")
     if gate is not None:
+        payload["status"] = gate["status"]
         payload["review_mode"] = gate["review_mode"]
         payload["next_action"] = gate["next_action"]
         if gate["status"] == "ask_user_first":
             payload["user_prompt"] = gate["user_prompt"]
         else:
             payload["confirmation_required"] = False
+            payload["blocked_until_confirmed"] = []
+            payload.pop("user_prompt", None)
+            if isinstance(payload.get("workflow_gate"), dict):
+                payload["workflow_gate"]["requires_explicit_user_confirmation"] = False
         return payload
     try:
         session = open_review(items=items, wait=False, timeout_s=timeout_s, detached=detached, **options)
@@ -126,7 +131,8 @@ def _other_candidates(candidates: list[Any], chosen: str) -> list[dict[str, str]
         if not smiles or smiles in seen:
             continue
         seen.add(smiles)
-        engine = candidate.get("engine") or candidate.get("source") or "OCSR"
+        meta = candidate.get("metadata") if isinstance(candidate.get("metadata"), dict) else {}
+        engine = meta.get("ocsr_tool") or candidate.get("engine") or candidate.get("source") or "OCSR"
         alternatives.append({"label": f"{engine} reading {len(alternatives) + 2}", "smiles": smiles})
         if len(alternatives) == 4:
             break

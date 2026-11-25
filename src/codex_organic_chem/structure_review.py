@@ -50,6 +50,7 @@ IMAGE_TYPES = {
     ".webp": "image/webp",
 }
 MAX_ASSET_BYTES = 25 * 1024 * 1024
+MAX_JSON_BODY_BYTES = 32 * 1024 * 1024
 LANGUAGES = ("en", "zh")
 
 
@@ -256,9 +257,15 @@ def _workbench_html() -> str:
 
 
 def _read_json_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
-    length = int(handler.headers.get("Content-Length") or 0)
+    raw_len = handler.headers.get("Content-Length")
+    try:
+        length = int(raw_len or 0)
+    except ValueError as exc:
+        raise ValueError("Invalid Content-Length header.") from exc
     if length <= 0:
         return {}
+    if length > MAX_JSON_BODY_BYTES:
+        raise ValueError(f"Request body exceeds {MAX_JSON_BODY_BYTES // (1024 * 1024)} MB limit.")
     raw = handler.rfile.read(length)
     if not raw:
         return {}
@@ -268,6 +275,25 @@ def _read_json_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     return payload
 
 
+MAX_IN_MEMORY_TERMINAL_SESSIONS = 64
+ASSET_RETENTION_AFTER_COMPLETE_S = 600
+
+
+def _prune_sessions_locked() -> None:
+    now = time.time()
+    terminal: list[tuple[float, str]] = []
+    for sid, sess in list(_SESSIONS.items()):
+        if sess.status == "pending" and now > sess.expires_at:
+            _expire_session_if_needed(sess)
+        if sess.status != "pending":
+            done_at = sess.completed_at or sess.expires_at or sess.created_at
+            if sess.assets and now - done_at > ASSET_RETENTION_AFTER_COMPLETE_S:
+                sess.assets.clear()
+            terminal.append((done_at, sid))
+    if len(terminal) > MAX_IN_MEMORY_TERMINAL_SESSIONS:
+        terminal.sort()
+        for _, sid in terminal[: len(terminal) - MAX_IN_MEMORY_TERMINAL_SESSIONS]:
+            _SESSIONS.pop(sid, None)
 def _session_by_id(session_id: str) -> ReviewSession | None:
     with _SESSIONS_LOCK:
         session = _SESSIONS.get(session_id)
@@ -616,11 +642,16 @@ def _persist(session: ReviewSession) -> None:
 
 
 def _should_open_browser() -> bool:
-    """Auto-open is on by default, but never during tests or when disabled."""
+    """Auto-open is on by default, but never during tests, CI, SSH, or headless Linux."""
     if os.environ.get("CODEX_CHEM_REVIEW_OPEN_BROWSER", "").lower() in {"0", "false", "no"}:
         return False
     if "PYTEST_CURRENT_TEST" in os.environ:
         return False
+    if os.environ.get("CI", "").lower() in {"1", "true", "yes"} or os.environ.get("SSH_CONNECTION"):
+        return False
+    if os.name == "posix" and os.uname().sysname == "Linux":
+        if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+            return False
     return True
 
 
@@ -688,6 +719,7 @@ def create_review_session(
         warnings=warnings,
     )
     with _SESSIONS_LOCK:
+        _prune_sessions_locked()
         _SESSIONS[session.id] = session
     _persist(session)
     return _session_payload(session, include_token=True)
@@ -720,7 +752,7 @@ def _authorized_session(session_id: str, token: str | None) -> ReviewSession:
     session = _session_by_id(session_id)
     if not session:
         raise KeyError("Unknown review session.")
-    if token is not None and token != session.token:
+    if token is not None and not secrets.compare_digest(str(token), session.token):
         raise PermissionError("Invalid review session token.")
     return session
 
@@ -1023,6 +1055,18 @@ def ensure_review_server(port: int = 0, admin_token: str | None = None) -> str:
 # HTTP
 
 
+def _is_loopback_origin(origin: str | None) -> bool:
+    if not origin or origin == "null":
+        return False
+    try:
+        parsed = urlparse(origin)
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    return (parsed.hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}
+
+
 class ReviewRequestHandler(BaseHTTPRequestHandler):
     server_version = "CodexChemReview/2.0"
 
@@ -1031,14 +1075,20 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
 
     def end_headers(self) -> None:
         origin = self.headers.get("Origin")
-        self.send_header("Access-Control-Allow-Origin", origin or "*")
-        self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Review-Token, X-Admin-Token")
+        if _is_loopback_origin(origin):
+            self.send_header("Access-Control-Allow-Origin", str(origin))
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Review-Token, X-Admin-Token")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
     def do_OPTIONS(self) -> None:
+        if self.headers.get("Origin") and not _is_loopback_origin(self.headers.get("Origin")):
+            self.send_response(403)
+            self.end_headers()
+            return
         self.send_response(204)
         self.end_headers()
 
@@ -1047,7 +1097,6 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
         _LAST_ACTIVITY = time.time()
 
     def do_GET(self) -> None:
-        self._touch()
         parsed = urlparse(self.path)
         parts = [unquote(part) for part in parsed.path.strip("/").split("/") if part]
         if parts == ["api", "health"]:
@@ -1060,17 +1109,18 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
             self._handle_get_asset(parts[2], parts[4], parsed.query)
             return
         if parsed.path in {"", "/", "/index.html"}:
+            self._touch()
             self._write_html(_workbench_html())
             return
         self._serve_ketcher_static(parsed.path)
 
     def do_POST(self) -> None:
-        self._touch()
         parsed = urlparse(self.path)
         parts = [unquote(part) for part in parsed.path.strip("/").split("/") if part]
         try:
             payload = _read_json_body(self)
             if parts == ["api", "preview"]:
+                self._touch()
                 record = normalize_structure(smiles=str(payload.get("smiles") or ""), source="review_preview")
                 record_dict = record.to_dict()
                 self._write_json(
@@ -1083,12 +1133,16 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
                 )
                 return
             if parts == ["api", "review-sessions"]:
-                if not _ADMIN_TOKEN or self.headers.get("X-Admin-Token") != _ADMIN_TOKEN:
+                admin_hdr = self.headers.get("X-Admin-Token") or ""
+                if not _ADMIN_TOKEN or not secrets.compare_digest(admin_hdr, _ADMIN_TOKEN):
                     raise PermissionError("Session creation over HTTP is not enabled for this caller.")
+                self._touch()
                 self._write_json(create_review_session_from_request(payload))
                 return
             if len(parts) >= 4 and parts[:2] == ["api", "review-sessions"]:
-                self._write_json(self._session_action(parts[2], parts[3:], payload, self._token(parsed.query)))
+                result = self._session_action(parts[2], parts[3:], payload, self._token(parsed.query))
+                self._touch()
+                self._write_json(result)
                 return
             self._write_json({"status": "error", "warnings": ["Unknown review API endpoint."]}, status=404)
         except PermissionError as exc:
@@ -1101,24 +1155,28 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
     def _session_action(
         self, session_id: str, rest: list[str], payload: dict[str, Any], token: str | None
     ) -> dict[str, Any]:
+        req_token = token or ""
+        session = _authorized_session(session_id, req_token)
         if rest[0] == "items" and len(rest) == 2:
-            submit_review_item(session_id, rest[1], payload, token=token)
-            return _session_payload(_authorized_session(session_id, token), for_page=True)
+            submit_review_item(session_id, rest[1], payload, token=req_token)
+            with session.condition:
+                return _session_payload(session, for_page=True)
         if rest == ["complete"]:
             complete_review_session(
-                session_id, token=token, verdict=payload.get("verdict"), comment=payload.get("comment")
+                session_id, token=req_token, verdict=payload.get("verdict"), comment=payload.get("comment")
             )
-            return _session_payload(_authorized_session(session_id, token), for_page=True)
+            with session.condition:
+                return _session_payload(session, for_page=True)
         if rest == ["cancel"]:
-            cancel_review_session(session_id, token=token)
-            return _session_payload(_authorized_session(session_id, token), for_page=True)
+            cancel_review_session(session_id, token=req_token)
+            with session.condition:
+                return _session_payload(session, for_page=True)
         if rest == ["comment"]:
-            set_session_comment(session_id, str(payload.get("comment") or ""), token=token)
+            set_session_comment(session_id, str(payload.get("comment") or ""), token=req_token)
             return {"status": "ok"}
         if rest[0] == "route" and len(rest) == 2:
-            return update_route_review(session_id, rest[1], payload, token=token)
+            return update_route_review(session_id, rest[1], payload, token=req_token)
         # stateless chemistry for the page, still behind the session token
-        session = _authorized_session(session_id, token or "")
         del session
         options = {
             "reference": payload.get("reference"),
@@ -1143,7 +1201,8 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
         return self.headers.get("X-Review-Token") or parse_qs(query).get("token", [None])[0]
 
     def _authorize(self, session: ReviewSession, query: str) -> bool:
-        return self._token(query) == session.token
+        supplied = self._token(query)
+        return bool(supplied) and secrets.compare_digest(str(supplied), session.token)
 
     def _handle_get_session(self, session_id: str, query: str) -> None:
         session = _session_by_id(session_id)
@@ -1153,14 +1212,18 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
         if not self._authorize(session, query):
             self._write_json({"status": "error", "warnings": ["Invalid review session token."]}, status=403)
             return
+        self._touch()
         for_page = parse_qs(query).get("view", [""])[0] == "page"
-        self._write_json(_session_payload(session, include_token=False, for_page=for_page))
+        with session.condition:
+            payload = _session_payload(session, include_token=False, for_page=for_page)
+        self._write_json(payload)
 
     def _handle_get_asset(self, session_id: str, name: str, query: str) -> None:
         session = _session_by_id(session_id)
         if not session or not self._authorize(session, query) or name not in session.assets:
             self.send_error(404)
             return
+        self._touch()
         mime, data = session.assets[name]
         self.send_response(200)
         self.send_header("Content-Type", mime)
@@ -1170,24 +1233,29 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
         self._safe_write(data)
 
     def _serve_ketcher_static(self, request_path: str) -> None:
-        dist = _ketcher_dist_path()
-        if request_path.rstrip("/") == "/ketcher":
-            candidate = dist / "index.html"
+        dist = _ketcher_dist_path().resolve()
+        if not dist.is_dir():
+            self.send_error(404)
+            return
+        clean_path = unquote(request_path)
+        if clean_path.rstrip("/") == "/ketcher":
+            candidate = (dist / "index.html").resolve()
         else:
-            relative = request_path.lstrip("/")
+            relative = clean_path.lstrip("/")
             candidate = (dist / relative).resolve()
-            if dist.exists():
-                try:
-                    candidate.relative_to(dist.resolve())
-                except ValueError:
-                    self.send_error(403)
-                    return
-        if candidate.exists() and candidate.is_file():
+        try:
+            candidate.relative_to(dist)
+        except ValueError:
+            self.send_error(403)
+            return
+        if candidate.is_file():
+            self._touch()
             content_type = mimetypes.guess_type(str(candidate))[0] or "application/octet-stream"
             data = candidate.read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self._safe_write(data)
             return
@@ -1198,6 +1266,7 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self._safe_write(data)
 
@@ -1206,6 +1275,14 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self' http://127.0.0.1:* http://localhost:*; "
+            "img-src 'self' data: blob: http://127.0.0.1:* http://localhost:*; "
+            "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
+            "frame-src 'self' http://127.0.0.1:* http://localhost:*;",
+        )
         self.end_headers()
         self._safe_write(data)
 

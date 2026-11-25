@@ -15,6 +15,7 @@ uv run codex-chem enumerate --smiles "CC1CCCCC1" --task substitution     # 5 con
 uv run codex-chem enumerate --smiles "OCC(O)CO" --task environments      # 2 C and 5 H environments
 uv run codex-chem route-check --example > route.json
 uv run codex-chem route-check --route route.json --figure-dir out --issues-only
+uv run codex-chem mechanism-steps-check --reaction "C=O.[C-]#N>C#N>OCC#N" --steps '["[O-]CC#N", "OCC#N"]'
 uv run codex-chem model-kit --task face --smiles "O=C1C[C@@H]2CC[C@H]1C2" --atoms 1
 uv run codex-chem model-kit --task isomer_energies --method xtb \
   --smiles "C1CC[C@H]2CCCC[C@@H]2C1" --smiles "C1CC[C@H]2CCCC[C@H]2C1"
@@ -46,7 +47,7 @@ uv run python scripts/benchmark_route_check.py --output-dir outputs/route_check_
 corrupts one compound at a time in three curated routes (inverted centre,
 dropped wedge, E/Z flip, lost carbon, extra CH2, O/N swap, shifted substituent,
 omitted last step) and counts how often a tool's output changes. Current
-result: 280 of 282 corruptions change the audit at blocking or review level; the
+result: 282 of 282 corruptions change the audit at blocking or review level; the
 earlier balance and normalization checks change for 67 and report every correct
 step as unbalanced. This shows that the feedback discriminates. It does not
 show that a model uses it; that needs a model-in-the-loop comparison.
@@ -63,8 +64,8 @@ and run `route-check` (see the skill's route-planning reference).
 a time, when the user wants to steer each disconnection.
 
 ```bash
-codex-chem synthesis-suggest --target-smiles "CC(=O)Oc1ccccc1C(=O)O"
-codex-chem synthesis-suggest --target-smiles "CC(=O)Oc1ccccc1C(=O)O" --confirmed
+uv run codex-chem synthesis-suggest --target-smiles "CC(=O)Oc1ccccc1C(=O)O"
+uv run codex-chem synthesis-suggest --target-smiles "CC(=O)Oc1ccccc1C(=O)O" --confirmed
 ```
 
 Each option includes local tool data and, when enabled, literature records

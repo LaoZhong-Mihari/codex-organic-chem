@@ -71,12 +71,18 @@ def _request(url: str, payload: dict[str, Any] | None = None, headers: dict[str,
 
 
 def _alive(state: dict[str, Any] | None) -> bool:
-    if not state or state.get("code_version") != _code_version():
+    if not state:
         return False
     try:
-        return _request(f"{state['base_url']}/api/health", timeout=2).get("status") == "ok"
+        health = _request(f"{state['base_url']}/api/health", timeout=2)
     except (RuntimeError, URLError, OSError, ValueError, KeyError):
         return False
+    if health.get("status") != "ok":
+        return False
+    # Never orphan an active human review session mid-flight over a code_version bump.
+    if state.get("code_version") != _code_version() and int(health.get("pending_sessions") or 0) == 0:
+        return False
+    return True
 
 
 def ensure_daemon() -> dict[str, Any]:
@@ -86,29 +92,48 @@ def ensure_daemon() -> dict[str, Any]:
         return state  # type: ignore[return-value]
     home = sr.home_dir()
     home.mkdir(parents=True, exist_ok=True)
+    lock_file = open(home / "review-server.lock", "a+", encoding="utf-8")  # noqa: SIM115
     try:
-        _state_path().unlink()
-    except OSError:
-        pass
-    log = open(home / "review-server.log", "ab")  # noqa: SIM115 - handed to the child
-    environment = os.environ.copy()
-    environment["CODEX_CHEM_HOME"] = str(home)
-    subprocess.Popen(
-        [sys.executable, "-m", "codex_organic_chem.review_daemon"],
-        stdin=subprocess.DEVNULL,
-        stdout=log,
-        stderr=log,
-        start_new_session=True,
-        env=environment,
-        cwd=str(home),
-    )
-    deadline = time.time() + STARTUP_TIMEOUT_S
-    while time.time() < deadline:
+        try:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        except Exception:
+            pass
         state = _read_state()
         if _alive(state):
             return state  # type: ignore[return-value]
-        time.sleep(0.15)
-    raise RuntimeError(f"The review server did not start; see {home / 'review-server.log'}.")
+        try:
+            _state_path().unlink()
+        except OSError:
+            pass
+        environment = os.environ.copy()
+        environment["CODEX_CHEM_HOME"] = str(home)
+        with open(home / "review-server.log", "ab") as log:
+            subprocess.Popen(
+                [sys.executable, "-m", "codex_organic_chem.review_daemon"],
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+                start_new_session=True,
+                env=environment,
+                cwd=str(home),
+            )
+        deadline = time.time() + STARTUP_TIMEOUT_S
+        while time.time() < deadline:
+            state = _read_state()
+            if _alive(state):
+                return state  # type: ignore[return-value]
+            time.sleep(0.15)
+        raise RuntimeError(f"The review server did not start; see {home / 'review-server.log'}.")
+    finally:
+        try:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        lock_file.close()
 
 
 def _attach_images(payload: dict[str, Any]) -> dict[str, Any]:

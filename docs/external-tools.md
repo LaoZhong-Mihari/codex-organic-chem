@@ -7,7 +7,7 @@
 The code detects these tools if present and reports `unavailable` otherwise. Run:
 
 ```bash
-codex-chem doctor
+uv run codex-chem doctor
 ```
 
 On macOS, install the supported local tools with:
@@ -41,7 +41,7 @@ scripts/install_external_tools_macos.sh
 Check local editor support with:
 
 ```bash
-codex-chem figure-tools
+uv run codex-chem figure-tools
 ```
 
 This reports whether ChemDraw, ChemDoodle, Marvin, Ketcher, Inkscape,
@@ -64,15 +64,19 @@ merged answer.
 Scheme-level OCSR helpers:
 
 ```bash
-codex-chem ocsr-benchmark --gold-smiles render_q8_sample_style.py --image-dir ocsr_crops --out tsv
-codex-chem parse-scheme --image scheme.png --crops ocsr_crops --gold-map legend.json
+uv run codex-chem crop-image scheme.png --grid --boxes '[{"id": "1", "box": [0.05, 0.10, 0.32, 0.45]}]' --output-dir ocsr_crops
+uv run codex-chem ocsr-benchmark --gold-smiles render_q8_sample_style.py --image-dir ocsr_crops --out tsv
+uv run codex-chem parse-scheme --image scheme.png --crops ocsr_crops --gold-map legend.json
 ```
 
-`ocsr-benchmark` reports exact graph match, main-fragment match, dummy count,
-fragment count, stereo warnings, and tool warnings for golden crop sets.
-`parse-scheme` keeps raw candidates, applies optional `R`/`X`/`R1` definitions
-with RDKit graph replacement, and emits route-consistency warnings for likely
-OCR jumps such as arene ortho/meta/para changes.
+`crop-image` writes 2× upscaled sub-crops and an optional normalized `0.1`-step
+`grid_overlay.png` ruler image for dense pages. `ocsr-benchmark` reports exact
+graph match, main-fragment match, dummy count, fragment count, stereo warnings,
+and tool warnings for golden crop sets. `parse-scheme` accepts either a crop
+directory or an inline JSON list of bounding boxes, keeps raw candidates,
+applies optional `R`/`X`/`R1` definitions with stereo-preserving RDKit graph
+replacement, and emits route-consistency warnings for likely OCR jumps such as
+arene ortho/meta/para changes.
 
 Local Q8 benchmark note, 2026-05-10/2026-05-11: DECIMER, MolGrapher, OpenChemIE,
 OSRA, and ChemSchematicResolver were installed or tested against the 9 crop

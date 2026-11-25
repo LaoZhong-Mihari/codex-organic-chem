@@ -10,6 +10,7 @@ from .service import (
     ENUMERATE_TASKS,
     chem_compare_structures,
     chem_compute,
+    chem_crop_image,
     chem_draw,
     chem_enumerate,
     chem_figure_tool_status,
@@ -21,6 +22,7 @@ from .service import (
     chem_mechanism_draft,
     chem_mechanism_render,
     chem_mechanism_spec_example,
+    chem_mechanism_steps_check,
     chem_mechanism_validate,
     chem_model_kit,
     chem_normalize_structure,
@@ -61,9 +63,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("parse-scheme", help="Parse a reaction scheme image and molecule crops with context resolution")
     p.add_argument("--image", required=True, help="Original full scheme image")
-    p.add_argument("--crops", required=True, help="Directory containing molecule crop images")
+    p.add_argument("--crops", required=True, help="Directory of crop images or JSON list of {id, box: [x1, y1, x2, y2]}")
     p.add_argument("--gold-map", help="Optional JSON/TSV compound-to-placeholder definitions")
     p.add_argument("--out", choices=["json"], default="json", help="Output format")
+
+    p = sub.add_parser("crop-image", help="Crop and magnify subregions of a page/scheme image or overlay a coordinate grid")
+    p.add_argument("image_path", help="Source page or scheme image")
+    p.add_argument("--boxes", help="JSON list of {id, box: [x1, y1, x2, y2]} (0..1 normalized or pixels)")
+    p.add_argument("--output-dir", help="Directory to write cropped PNGs / grid image")
+    p.add_argument("--grid", action="store_true", help="Also write grid_overlay.png with 0.1-step coordinate rulers")
+    p.add_argument("--scale", type=float, default=2.0, help="Upscale factor for crops (default: 2.0)")
+    p.add_argument("--padding-px", type=int, default=12, help="Padding pixels around each crop box")
 
     def review_options(parser: argparse.ArgumentParser, lifetime: int = 1800) -> None:
         parser.add_argument("--wait", action="store_true", help="Block until the user finishes the review, for at most --wait-s")
@@ -132,7 +142,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("reaction-analyze", help="Analyze reaction plausibility, conditions, or retrosynthesis hints")
     p.add_argument("--reaction", required=True)
-    p.add_argument("--mode", choices=["forward", "retro", "conditions", "sanity_check"], default="sanity_check")
+    p.add_argument(
+        "--mode",
+        choices=["forward", "retro", "conditions", "sanity_check", "mass_charge_balance"],
+        default="sanity_check",
+    )
 
     p = sub.add_parser("mechanism-draft", help="Draft a rule-based organic mechanism")
     p.add_argument("--reaction", required=True)
@@ -147,6 +161,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("mechanism-validate", help="Check mapped states, electron moves, and graph edits without rendering")
     p.add_argument("--spec", required=True)
+
+    p = sub.add_parser("mechanism-steps-check", help="Audit an intermediate SMILES sequence step by step (valence, skeleton, delta, product closure)")
+    p.add_argument("--steps", required=True, help="Path to JSON file or inline JSON list of intermediate SMILES / step dicts")
+    p.add_argument("--reactants", help="Dot-separated reactant SMILES")
+    p.add_argument("--products", help="Dot-separated target product SMILES")
+    p.add_argument("--conditions", help="Free-text reagents and conditions")
+    p.add_argument("--reaction", help="Reaction SMILES shorthand (reactants>reagents>products)")
+    p.add_argument("--issues-only", action="store_true", help="Omit per-step details and report status + issues only")
 
     p = sub.add_parser("route-figure", help="Render a publication-style route/scheme figure from a JSON spec")
     p.add_argument("--spec", help="Path to route figure spec JSON. Omit with --example to print an example spec.")
@@ -240,6 +262,15 @@ def main(argv: list[str] | None = None) -> None:
             return
     elif args.command == "parse-scheme":
         payload = chem_parse_scheme(args.image, args.crops, gold_map=args.gold_map)
+    elif args.command == "crop-image":
+        payload = chem_crop_image(
+            image_path=args.image_path,
+            boxes=args.boxes,
+            output_dir=args.output_dir,
+            grid=args.grid,
+            scale=args.scale,
+            padding_px=args.padding_px,
+        )
     elif args.command == "input-review":
         payload = chem_input_review(
             smiles=args.smiles,
@@ -334,6 +365,37 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "mechanism-validate":
         with open(args.spec, encoding="utf-8") as handle:
             payload = chem_mechanism_validate(json.load(handle))
+    elif args.command == "mechanism-steps-check":
+        raw_steps = args.steps.strip()
+        if raw_steps.startswith(("[", "{")):
+            parsed = json.loads(raw_steps)
+            if isinstance(parsed, dict):
+                payload = chem_mechanism_steps_check(
+                    steps=parsed.get("steps") or parsed.get("mechanism"),
+                    reactants=args.reactants or parsed.get("reactants") or parsed.get("reactants_smiles"),
+                    products=args.products or parsed.get("products") or parsed.get("products_smiles"),
+                    conditions=args.conditions or parsed.get("conditions"),
+                    reaction=args.reaction or parsed.get("reaction"),
+                    issues_only=args.issues_only,
+                )
+            else:
+                payload = chem_mechanism_steps_check(
+                    steps=parsed,
+                    reactants=args.reactants,
+                    products=args.products,
+                    conditions=args.conditions,
+                    reaction=args.reaction,
+                    issues_only=args.issues_only,
+                )
+        else:
+            payload = chem_mechanism_steps_check(
+                steps_path=raw_steps,
+                reactants=args.reactants,
+                products=args.products,
+                conditions=args.conditions,
+                reaction=args.reaction,
+                issues_only=args.issues_only,
+            )
     elif args.command == "mechanism-render":
         if args.example:
             payload = chem_mechanism_spec_example()

@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install Python and dependencies
+        run: uv sync --python ${{ matrix.python-version }} --extra mcp --extra dev
+      - name: Run packaging and skill mirror checks
+        run: uv run --python ${{ matrix.python-version }} pytest tests/test_packaging.py tests/test_skill_mirrors.py
+      - name: Run full test suite
+        run: uv run --python ${{ matrix.python-version }} pytest
+      - name: Verify end-to-end install and MCP handshake
+        run: uv run --python ${{ matrix.python-version }} python scripts/check_install.py

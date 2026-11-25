@@ -27,6 +27,16 @@ def _molecule_payload(input_path: str) -> dict:
     }
 
 
+def _extract_role_smiles(entries: list | None) -> list[str]:
+    out: list[str] = []
+    for item in entries or []:
+        if isinstance(item, dict):
+            smi = item.get("smiles") or item.get("canonical_smiles")
+            if smi and isinstance(smi, str) and smi != "<invalid>":
+                out.append(smi.strip())
+    return [s for s in out if s]
+
+
 def _reaction_payload(input_path: str) -> dict:
     with open(os.devnull, "w", encoding="utf-8") as sink, contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
         from PIL import Image
@@ -37,15 +47,20 @@ def _reaction_payload(input_path: str) -> dict:
         result = model.extract_reactions_from_figures([image], batch_size=1, molscribe=True, ocr=True)[0]
     candidates = []
     for reaction in result.get("reactions", []):
-        candidates.append(
-            {
-                "tool": "openchemie_rxnscribe",
-                "reaction": reaction,
-                "adapter_warnings": [
-                    "OpenChemIE reaction output contains structured roles/bboxes; convert to reaction SMILES after manual review."
-                ],
-            }
-        )
+        r_smi = _extract_role_smiles(reaction.get("reactants"))
+        a_smi = _extract_role_smiles(reaction.get("conditions") or reaction.get("reagents"))
+        p_smi = _extract_role_smiles(reaction.get("products"))
+        rxn_smiles = f"{'.'.join(r_smi)}>{'.'.join(a_smi)}>{'.'.join(p_smi)}" if (r_smi or p_smi) else None
+        entry = {
+            "tool": "openchemie_rxnscribe",
+            "reaction": reaction,
+            "adapter_warnings": [
+                "OpenChemIE reaction output contains structured roles/bboxes; verify stoichiometry and conditions manually."
+            ],
+        }
+        if rxn_smiles:
+            entry["reaction_smiles"] = rxn_smiles
+        candidates.append(entry)
     return {
         "tool": "openchemie_rxnscribe",
         "candidates": candidates,

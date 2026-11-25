@@ -12,7 +12,7 @@ The pinned dependency graphs live in `uv.lock` for Python and
 
 ## Required runtime
 
-- Python `>=3.12,<3.13` (uv provides it)
+- Python `>=3.12` (uv provides it)
 - `uv` for environment creation, locking, and running commands
 - RDKit `>=2024.9.1`, NumPy `>=1.26`, Pillow `>=10.0`
 
@@ -153,10 +153,14 @@ export CODEX_CHEM_MARVIN_APP="/Applications/MarvinSketch.app"
 export CODEX_CHEM_MARVIN_JS_DIR="/path/to/marvin-js"
 export CODEX_CHEM_KETCHER_URL="http://localhost:8080"
 export CODEX_CHEM_KETCHER_DIST="/path/to/ketcher/build"
+export CODEX_CHEM_TOOL_PREFIX=/path/to/conda-tools # optional prefix searched for obabel/xtb/crest
 export CODEX_CHEM_REVIEW_OPEN_BROWSER=0   # return the review URL without opening a browser
 export CODEX_CHEM_REVIEW=ask              # auto | ask | off; overrides `codex-chem review-mode`
 export CODEX_CHEM_HOME="$HOME/.codex-chem" # review results, saved settings, review-server state
+export CODEX_CHEM_MCP_COMPACT=1     # opt-in: expose the 14-tool compact MCP profile
 export CODEX_CHEM_ENABLE_PYTHON=1   # opt-in: MCP tool chem_python (arbitrary local code)
+export CODEX_CHEM_MAILTO="you@example.org" # optional OpenAlex/Crossref polite-pool contact
+export OPENALEX_API_KEY="..."       # optional OpenAlex API key
 ```
 
 ## Ketcher frontend integration
@@ -193,10 +197,11 @@ results are written to `$CODEX_CHEM_HOME/reviews/`.
 
 Most tools are local. `chem_literature_search` sends the query text to the
 OpenAlex Works API (abstracts, citation counts, open-access links) and to the
-Crossref Works API as fallback and supplement. No API key and no contact
-address is sent. The verification kit (`compare`, `enumerate`, `route-check`,
-`model-kit`) needs only RDKit and NumPy, which RDKit already depends on; xTB is
-used for `model-kit` refinement when installed.
+Crossref Works API as fallback and supplement. By default no API key or contact
+address is sent unless `OPENALEX_API_KEY` or `CODEX_CHEM_MAILTO` is configured.
+The verification kit (`compare`, `enumerate`, `route-check`,
+`mechanism-steps-check`, `model-kit`) needs only RDKit and NumPy, which RDKit
+already depends on; xTB is used for `model-kit` refinement when installed.
 
 ## Code execution through MCP (opt-in)
 

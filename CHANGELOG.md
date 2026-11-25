@@ -4,29 +4,69 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-### Changed
-
-- Route figures (`route-figure` / `chem_route_figure`) keep a shared core in
-  place: a structure given as SMILES is laid out with the part it shares with
-  an earlier structure held at that structure's 2D coordinates, so a protected
-  ring no longer flips or turns from step to step (`align_structures`, on by
-  default; Molfile input keeps its own layout). Digits in reagent formulas in
-  arrow text become subscripts (`subscript_formulas`). Long captions wrap and
-  widen their cell instead of running off the canvas, long titles and
-  footnotes widen the canvas, and `max_width` wraps a long row at arrows into
-  rows of even width. Results gain `layout` and, per molecule, `aligned_to`
-  and `aligned_atoms`.
-- `route-check --figure-dir` (`route_to_figure_spec`) captions each compound
-  with its number in bold and its name underneath, puts reagents above each
-  arrow and solvents, temperatures, times and atmospheres below
-  (`split_conditions`), and wraps the steps into rows of similar width
-  (`max_width` 1200; `steps_per_row` keeps fixed rows). The hydroxyproline
-  example is no longer blocked by a clipped caption.
-
 ### Added
 
+- `mechanism-steps-check` / `chem_mechanism_steps_check` / `kit.mechanism_steps_check`:
+  audits stepwise reaction intermediate sequences (plain SMILES lists or
+  oMeBench-style step objects) without requiring 2D curved-arrow coordinates,
+  checking valence, radical parity, heavy-atom skeleton invariance on proton
+  transfers, element provenance, consecutive formula/charge deltas, and target
+  closure (flagging `incomplete_cascade_constitutional_isomer` when a sequence
+  stops at an un-rearranged constitutional isomer of the product).
+- `crop-image` / `chem_crop_image` / `kit.crop_image` and inline bounding-box
+  support in `chem_parse_scheme`: renders a 0.1-step normalized coordinate grid
+  overlay and 2× Lanczos upscaled sub-crops for dense multi-structure pages.
+- MCP tool docstrings across all 28 tools, `Literal` parameter enums,
+  `chem://skill/...` MCP resources, `CODEX_CHEM_MCP_COMPACT=1` compact profile,
+  and `.github/workflows/ci.yml` for Ubuntu + macOS across Python 3.12+.
+
+### Changed
+
+- `route-check` discrimination benchmark reaches **282/282 (100%)** with zero
+  extra false alarms on the clean reference routes: added coordinate-free
+  stereospecificity checks for concerted `E`/`Z`-alkene `[2+1]` ring formations
+  (epoxidation, cyclopropanation, aziridination), *syn*-dihydroxylation and
+  *anti*-dihalogenation; tightened deprotection and `-CH4O`/`-C2H6O` delta rules
+  against conditions and substrate groups; prevented missing single-letter IDs
+  (`"C"`, `"B"`, `"I"`) from parsing as inline methane/borane/HI; eliminated
+  `TBDPS`/`Tr`/`Ph` automorphism exhaustion and moved CIP assignment outside the
+  MCS loop (>50× faster on protected polyols); and refined `enone` SMARTS and
+  multi-site (2×–6×) polyol protection recognition.
+- `model-kit --task face` (`kit.face`) assigns IUPAC 2013 `Re`/`Si` faces via
+  topological `rdCIPLabeler` probes, resolving `Re/Si undefined` on achiral
+  prochiral carbonyls/alkenes and inverted `Re`/`Si` labels on chiral esters.
+- `enumerate --task symmetry` (`kit.symmetry_environments`) resolves
+  diastereotopic $^{13}\text{C}$/heavy-atom NMR signals in 3D, and `compare`
+  handles OpenSMILES axial allenes (`=[C@]=`/`=[C@@]=`), isotopologues,
+  isotopomers, and `tautomers_different_stereo`.
+- `mechanism-validate` and `mechanism-render` now support spectator aromatic
+  rings, localized Kekulé replay on active aromatic rings ($S_E\text{Ar}$),
+  spectator alkali/halide counterions, intermolecular $\pi$-bond attacks
+  (`from_bond` to cross-molecule `to_bond` or `to_atom_map`), teaching-mode
+  lone-pair/partial-charge rendering, and spec-compliant integer `Element` and
+  geometry attributes in CDXML.
+- Route figures (`route-figure` / `chem_route_figure`) keep a shared core in
+  place (`align_structures`), avoid subscripting precatalyst tags (`XPhos-Pd-G3`),
+  measure and wrap wide CJK glyphs accurately, render `row["note"]` headers, and
+  preserve duplicate reactants in homodimerizations (`route_to_figure_spec`).
 - README section on route and mechanism figures, with the spec of its route
   figure in `docs/examples/hydroxyproline-route-figure.json`.
+
+### Fixed
+
+- Hardened local review server (`structure_review.py`, `workbench.html`,
+  `review_daemon.py`): enforced constant-time `X-Review-Token` checks on all
+  HTTP `POST` endpoints, blocked path traversal when `integrations/ketcher/dist`
+  is absent, restricted CORS and `?api=` to loopback origins, capped request
+  body size, replaced `exec_module` in `load_gold_smiles` with AST literal
+  parsing, scrubbed secret env vars and killed process groups on timeout in
+  `chem_python`, added `flock` daemon startup locking, and preserved unfocused
+  drafts in `workbench.html`.
+- Fixed stereocentre inversion during `scheme_ocsr.resolve_placeholders`,
+  corrected `MEM` (`*COCCOC`) vs `MEMO` (`*OCOCCOC`) attachment and MolScribe
+  `@`/`@@` chiral direction, added UFF fallback for boron/silicon in
+  `semiempirical.py`, blocked Hessian runs after failed `--opt`, and fixed
+  `CODEX_CHEM_REVIEW=off|ask` state transitions.
 
 ## [1.1.0] - 2026-11-19
 
